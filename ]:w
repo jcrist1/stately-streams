@@ -1,6 +1,5 @@
 use std::{
     marker::PhantomData,
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::MutexGuard,
 };
@@ -103,26 +102,27 @@ impl<H1: TypeBool, T1: Filter + BoolAlg<T2> + POSet<T2>, H2: TypeBool, T2: Filte
 
 pub trait Lock<FilterType: Filter>: 'static + Clone {
     type InnerType;
-    type LockType<'a>: AsMutHList<'a>;
+    type LockType<'a>: AsMutHList<'a>
+    where
+        Self: 'a;
+    type RefType<'a, 'b>
+    where
+        'a: 'b,
+    = <Self::LockType<'a> as AsMutHList<'a>>::AsMutType;
     fn lock<'a>(&'a self) -> Self::LockType<'a>;
 
     fn apply_fn<
-        'a: 'b,
-        'b,
+        'a,
         InputType: 'static,
         OutputType: 'static + Clone,
-        F: Fn(<Self::LockType<'b> as AsMutHList<'b>>::AsMutType, InputType) -> OutputType,
+        F: Fn(<Self::LockType<'a> as AsMutHList<'a>>::AsMutType, InputType) -> OutputType,
     >(
         &'a self,
         input: InputType,
         f: F,
     ) -> OutputType {
-        let mut lock: Self::LockType<'a> = Lock::<FilterType>::lock(self);
-        // let o = 'b: {
-        //     let lock_ref: &mut Self::LockType<'_> = &mut lock;
-        //     lock_ref.apply_fn(input, f)
-        // };
-        todo!()
+        let mut lock = Lock::<FilterType>::lock(self);
+        lock.apply_fn(input, f)
     }
 }
 
@@ -237,7 +237,7 @@ pub trait AsMutHList<'a>: 'a + Sized {
         OutputType: 'static,
         F: Fn(Self::AsMutType, InputType) -> OutputType,
     >(
-        mut self,
+        &'a mut self,
         input: InputType,
         f: F,
     ) -> OutputType {

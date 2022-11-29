@@ -74,10 +74,10 @@ where
     for<'a> <LockType as Lock<FilterType>>::LockType<'a>: AsMutHList<'a>,
     ItemTransformation: for<'d> Fn(
         InputType,
-        &'d mut <<LockType as Lock<FilterType>>::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
+        &'d mut <<LockType as Lock<FilterType>>::LockType<'d> as AsMutHList<'d>>::AsMutType,
     ) -> (
         OutputType,
-        &'d mut <<LockType as Lock<FilterType>>::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
+        &'d mut <<LockType as Lock<FilterType>>::LockType<'d> as AsMutHList<'d>>::AsMutType,
     ),
     InputStream: Stream<Item = InputType>,
 {

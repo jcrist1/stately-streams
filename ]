@@ -107,11 +107,10 @@ pub trait Lock<FilterType: Filter>: 'static + Clone {
     fn lock<'a>(&'a self) -> Self::LockType<'a>;
 
     fn apply_fn<
-        'a: 'b,
-        'b,
+        'a,
         InputType: 'static,
         OutputType: 'static + Clone,
-        F: Fn(<Self::LockType<'b> as AsMutHList<'b>>::AsMutType, InputType) -> OutputType,
+        F: for<'b> Fn(<Self::LockType<'b> as AsMutHList<'b>>::AsMutType, InputType) -> OutputType,
     >(
         &'a self,
         input: InputType,
@@ -122,7 +121,7 @@ pub trait Lock<FilterType: Filter>: 'static + Clone {
         //     let lock_ref: &mut Self::LockType<'_> = &mut lock;
         //     lock_ref.apply_fn(input, f)
         // };
-        todo!()
+        todo!
     }
 }
 
@@ -237,7 +236,7 @@ pub trait AsMutHList<'a>: 'a + Sized {
         OutputType: 'static,
         F: Fn(Self::AsMutType, InputType) -> OutputType,
     >(
-        mut self,
+        &'a mut self,
         input: InputType,
         f: F,
     ) -> OutputType {
