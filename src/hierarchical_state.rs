@@ -100,24 +100,33 @@ impl<H1: TypeBool, T1: Filter + BoolAlg<T2> + POSet<T2>, H2: TypeBool, T2: Filte
         <<H2 as TypeBool>::And<<H1 as TypeBool>::Or<H2>> as TypeBool>::And<T1::IsSubset>;
 }
 
-pub trait Lock<FilterType: Filter>: 'static {
+pub trait Lock<FilterType: Filter>: 'static + Clone {
     type InnerType;
     type LockType<'a>: AsMutHList<'a>
     where
         Self: 'a;
-    type RefType<'a>: 'a;
+    type RefType<'a, 'b>
+    where
+        'a: 'b,
+    = <Self::LockType<'a> as AsMutHList<'a>>::AsMutType<'b>;
     fn lock<'a>(&'a self) -> Self::LockType<'a>;
 
     fn apply_fn<
-        'a,
+        'a: 'b,
+        'b: 'c,
+        'c,
         InputType: 'static,
-        OutputType: 'static,
-        F: for<'d> Fn(Self::RefType<'d>, InputType) -> OutputType,
+        OutputType: 'static + Clone,
+        F: Fn(<Self::LockType<'a> as AsMutHList<'a>>::AsMutType<'a>, InputType) -> OutputType,
     >(
         &'a self,
         input: InputType,
         f: F,
-    ) -> OutputType;
+    ) -> OutputType {
+        let mut lock = Lock::<FilterType>::lock(self);
+        let mut mut_ref = lock.mut_ref();
+        f(mut_ref, input)
+    }
 }
 
 impl Lock<HNil> for HNil {
@@ -125,21 +134,6 @@ impl Lock<HNil> for HNil {
     type LockType<'a> = HNil where HNil: 'a;
     fn lock<'a>(&'a self) -> HNil {
         HNil
-    }
-
-    type RefType<'a> = <Self::LockType<'a> as AsMutHList<'a>>::AsMutType<'a>;
-    fn apply_fn<
-        'a,
-        InputType: 'static,
-        OutputType: 'static,
-        F: for<'d> Fn(Self::RefType<'d>, InputType) -> OutputType,
-    >(
-        &'a self,
-        input: InputType,
-        f: F,
-    ) -> OutputType {
-        let mut guard = self.lock();
-        guard.apply_fn(input, f)
     }
 }
 
@@ -149,7 +143,6 @@ impl<S: SafeType + 'static, TailFilter: Filter, TailState: Lock<TailFilter>>
     type LockType<'a> = HCons<AsMutContainer<MutexGuard<'a, S>, S>, TailState::LockType<'a>>;
 
     type InnerType = HCons<S, TailState::InnerType>;
-    type RefType<'a> = <Self::LockType<'a> as AsMutHList<'a>>::AsMutType<'a>;
 
     fn lock<'a>(&'a self) -> Self::LockType<'a> {
         let HCons { head, tail } = self;
@@ -160,19 +153,6 @@ impl<S: SafeType + 'static, TailFilter: Filter, TailState: Lock<TailFilter>>
             tail,
         }
     }
-    fn apply_fn<
-        'a,
-        InputType: 'static,
-        OutputType: 'static,
-        F: for<'d> Fn(Self::RefType<'d>, InputType) -> OutputType,
-    >(
-        &'a self,
-        input: InputType,
-        f: F,
-    ) -> OutputType {
-        let mut guard = <Self as Lock<HCons<True, TailFilter>>>::lock(self);
-        guard.apply_fn(input, f)
-    }
 }
 
 impl<S: SafeType + 'static, TailFilter: Filter, TailState: Lock<TailFilter>>
@@ -181,24 +161,10 @@ impl<S: SafeType + 'static, TailFilter: Filter, TailState: Lock<TailFilter>>
     type LockType<'a> = TailState::LockType<'a>;
 
     type InnerType = TailState::InnerType;
-    type RefType<'a> = <Self::LockType<'a> as AsMutHList<'a>>::AsMutType<'a>;
 
     fn lock<'a>(&'a self) -> Self::LockType<'a> {
         let HCons { tail, .. } = self;
         tail.lock()
-    }
-    fn apply_fn<
-        'a,
-        InputType: 'static,
-        OutputType: 'static,
-        F: for<'d> Fn(Self::RefType<'d>, InputType) -> OutputType,
-    >(
-        &'a self,
-        input: InputType,
-        f: F,
-    ) -> OutputType {
-        let mut guard = <Self as Lock<HCons<False, TailFilter>>>::lock(self);
-        guard.apply_fn(input, f)
     }
 }
 
@@ -220,7 +186,7 @@ impl<'b> AsRefHList<'b> for HNil {
         HNil
     }
 }
-struct AsMutContainer<RefType, Type> {
+pub struct AsMutContainer<RefType, Type> {
     item: RefType,
     _type: PhantomData<Type>,
 }
@@ -265,7 +231,7 @@ impl<'b, Head: 'static, HeadRef: 'b + AsRef<Head>, Tail: AsRefHList<'b>> AsRefHL
     }
 }
 
-pub trait AsMutHList<'a>: 'a {
+pub trait AsMutHList<'a>: 'a + Sized {
     type AsMutType<'b>: 'b
     where
         'a: 'b;
@@ -277,14 +243,18 @@ pub trait AsMutHList<'a>: 'a {
         'b,
         InputType: 'static,
         OutputType: 'static,
-        F: for<'d> Fn(Self::AsMutType<'d>, InputType) -> OutputType,
+        F: Fn(Self::AsMutType<'b>, InputType) -> OutputType,
     >(
         &'b mut self,
         input: InputType,
         f: F,
-    ) -> OutputType {
+    ) -> OutputType
+    where
+        'a: 'b,
+    {
         let mut_ref = self.mut_ref();
-        f(mut_ref, input)
+        let o = f(mut_ref, input);
+        o
     }
 }
 
@@ -359,6 +329,49 @@ mod test {
         {
             let hlist_pat!(_, _, _) = h_list.as_ref();
         }
+    }
+
+    #[test]
+    fn test_apply_lock() {
+        let state_1 = new_shared(1u32);
+        let state_2 = new_shared(String::from("boop"));
+        let state_3: SharedMutex<Vec<u32>> = new_shared(vec![]);
+        let state = hlist!(state_1, state_2, state_3);
+        let input = 4;
+        let fun = |hlist_pat![u32_mut, string_mut, vec_mut]: HList!(
+            &mut u32,
+            &mut String,
+            &mut Vec<u32>
+        ),
+                   input| {
+            *u32_mut += 1u32;
+            string_mut.push_str(&format!("{input}"));
+            vec_mut.push(input)
+        };
+        Lock::<HList!(True, True, True)>::apply_fn(&state, input, fun);
+    }
+
+    #[test]
+    fn test_apply_as_mut_hlist() {
+        let state_1 = new_shared(1u32);
+        let state_2 = new_shared(String::from("boop"));
+        let state_3: SharedMutex<Vec<u32>> = new_shared(vec![]);
+        let state = hlist!(state_1, state_2, state_3);
+        let input = 4;
+        let fun = |hlist_pat![u32_mut, string_mut, vec_mut]: HList!(
+            &mut u32,
+            &mut String,
+            &mut Vec<u32>
+        ),
+                   input| {
+            *u32_mut += 1u32;
+            string_mut.push_str(&format!("{input}"));
+            vec_mut.push(input)
+        };
+        let o = {
+            let mut locked = Lock::<HList!(True, True, True)>::lock(&state);
+            locked.apply_fn(input, fun)
+        };
     }
 
     // need to uncomment #[test]

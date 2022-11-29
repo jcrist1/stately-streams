@@ -98,35 +98,35 @@ where
         let lock = self.lock;
         self.input
             .zip(repeat(lock))
-            .zip(repeat(self.transformation))
-            .map(lock_lock_type)
+            .zip(repeat(self.transformation));
+        todo!()
+        //.map(lock_lock_type)
     }
 }
 
-fn lock_lock_type<
-    InputType: 'static,
-    OutputType: 'static,
-    FilterType: Filter,
-    LockType: Lock<FilterType>,
-    F: for<'d> Fn(
-        InputType,
-        &'d mut <LockType::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
-    ) -> (
-        OutputType,
-        &'d mut <LockType::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
-    ),
->(
-    ((input, lock), f): ((InputType, LockType), F),
-) -> OutputType {
-    let mut guard = lock.lock();
-    let mut mut_ref = guard.mut_ref();
-    let mut_mut_ref = &mut mut_ref;
-
-    let (o, mut_mut_ref) = f(input, mut_mut_ref);
-    drop(mut_ref);
-    drop(guard);
-    o
-}
+//fn lock_lock_type<
+//    InputType: 'static,
+//    OutputType: 'static,
+//    FilterType: Filter,
+//    LockType: Lock<FilterType>,
+//    F: for<'d> Fn(
+//        InputType,
+//        &'d mut <LockType::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
+//    ) -> (
+//        OutputType,
+//        &'d mut <LockType::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
+//    ),
+//>(
+//    ((input, lock), f): ((InputType, LockType), F),
+//) -> OutputType {
+//    let mut guard = lock.lock();
+//    let mut mut_ref = guard.mut_ref();
+//    let mut_mut_ref = &mut mut_ref;
+//    let (o, mut_mut_ref) = f(input, mut_mut_ref);
+//    drop(mut_ref);
+//    drop(guard);
+//    o
+//}
 
 #[cfg(test)]
 mod test {

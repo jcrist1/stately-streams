@@ -1,6 +1,7 @@
 #![feature(auto_traits)]
 #![feature(negative_impls)]
 #![feature(trait_alias)]
+#![feature(associated_type_defaults)]
 mod async_coprod;
 mod async_hlist;
 mod hierarchical_state;
