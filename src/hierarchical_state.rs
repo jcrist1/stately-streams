@@ -101,8 +101,8 @@ impl<H1: TypeBool, T1: Filter + BoolAlg<T2> + POSet<T2>, H2: TypeBool, T2: Filte
 }
 
 pub trait Lock<FilterType: Filter>: 'static + Clone {
-    type InnerType: MutRefHList;
-    type LockType<'a>: AsMutHList<'a>
+    type InnerType: MutRefHList + 'static;
+    type LockType<'a>: AsMutHList<'a, Self::InnerType>
     where
         Self: 'a;
     fn lock<'a>(&'a self) -> Self::LockType<'a>;
@@ -198,10 +198,10 @@ pub trait MutRefHList {
 }
 
 impl MutRefHList for HNil {
-    type MutRefHList<'a>  = HNil;
+    type MutRefHList<'a> = HNil;
 }
 
-impl<Head: 'static , Tail: MutRefHList + 'static> MutRefHList for HCons<Head, Tail> {
+impl<Head: 'static, Tail: MutRefHList + 'static> MutRefHList for HCons<Head, Tail> {
     type MutRefHList<'a> = HCons<&'a mut Head, Tail::MutRefHList<'a>>;
 }
 
@@ -222,12 +222,8 @@ impl<'b, Head: 'static, HeadRef: 'b + AsRef<Head>, Tail: AsRefHList<'b>> AsRefHL
     }
 }
 
-pub trait AsMutHList<'a>: 'a + Sized {
-    type InnerType: MutRefHList;
-    type AsMutType<'b>: 'b
-    where
-        'a: 'b;
-    fn mut_ref<'b>(&'b mut self) -> Self::AsMutType<'b>
+pub trait AsMutHList<'a, MutRefHListType: MutRefHList>: 'a + Sized {
+    fn mut_ref<'b>(&'b mut self) -> MutRefHListType::MutRefHList<'b>
     where
         'a: 'b;
 
@@ -235,7 +231,7 @@ pub trait AsMutHList<'a>: 'a + Sized {
         'b,
         InputType: 'static,
         OutputType: 'static,
-        F: Fn(Self::AsMutType<'b>, InputType) -> OutputType,
+        F: Fn(MutRefHListType::MutRefHList<'b>, InputType) -> OutputType,
     >(
         &'b mut self,
         input: InputType,
@@ -250,22 +246,20 @@ pub trait AsMutHList<'a>: 'a + Sized {
     }
 }
 
-impl<'a> AsMutHList<'a> for HNil {
-    type AsMutType<'b> = HNil where 'a: 'b;
-    fn mut_ref<'b>(&'b mut self) -> HNil where 'a: 'b {
+impl<'a> AsMutHList<'a, HNil> for HNil {
+    fn mut_ref<'b>(&'b mut self) -> HNil
+    where
+        'a: 'b,
+    {
         HNil
     }
 }
 
-impl<'a, Head: 'static, Tail: AsMutHList<'a>> AsMutHList<'a>
-    for HCons<AsMutContainer<std::sync::MutexGuard<'a, Head>, Head>, Tail>
+impl<'a, Head: 'static, Tail: 'static + MutRefHList, TailGuard: AsMutHList<'a, Tail>>
+    AsMutHList<'a, HCons<Head, Tail>>
+    for HCons<AsMutContainer<std::sync::MutexGuard<'a, Head>, Head>, TailGuard>
 {
-    type AsMutType<'b>
-    = HCons<&'b mut Head, Tail::AsMutType<'b>> 
-    where
-        'a: 'b;
-
-    fn mut_ref<'b>(&'b mut self) -> HCons<&'b mut Head, Tail::AsMutType<'b>>
+    fn mut_ref<'b>(&'b mut self) -> HCons<&'b mut Head, Tail::MutRefHList<'b>>
     where
         'a: 'b,
     {
@@ -322,7 +316,6 @@ mod test {
             let hlist_pat!(_, _, _) = h_list.as_ref();
         }
     }
-
 
     #[test]
     fn test_apply_as_from_locked() {

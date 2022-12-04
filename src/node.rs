@@ -76,7 +76,7 @@ impl<
     >
 where
     LockTypeAsMutRefHList: MutRefHList,
-    LockType: Lock<FilterType>,
+    LockType: Lock<FilterType, InnerType = LockTypeAsMutRefHList>,
     ItemTransformation:
         for<'a> Fn(LockTypeAsMutRefHList::MutRefHList<'a>, InputType) -> OutputType + Clone,
     InputStream: Stream<Item = InputType>,
@@ -104,59 +104,13 @@ where
                 let o = {
                     let reffed: &'_ LockType = &lock;
                     let mut guard: <LockType as Lock<FilterType>>::LockType<'_> = reffed.lock();
-                    todo!()
-                    // let o = guard.apply_fn(item, f.clone());
+                    guard.apply_fn(item, f.clone())
                     // o
                 };
                 ready((lock, f))
             })
         //.map(lock_lock_type)
     }
-}
-
-struct LockTypeAlignedFn<LockType, MutRefHListType, F, Fltr, Input, Output> {
-    _locktype: PhantomData<LockType>,
-    _mut_ref_hlist_type: PhantomData<MutRefHListType>,
-    _filter: PhantomData<Fltr>,
-    _input: PhantomData<Input>,
-    _output: PhantomData<Output>,
-    function: F,
-}
-
-impl<LockType, MutRefHListType, F, Fltr, Input, Output>
-    LockTypeAlignedFn<LockType, MutRefHListType, F, Fltr, Input, Output>
-where
-    Fltr: Filter,
-    LockType: Lock<Fltr>,
-    MutRefHListType: MutRefHList,
-    F: for<'e> Fn(MutRefHListType::MutRefHList<'e>, Input) -> Output,
-{
-    fn call<'a, 'b>(&self, input: Input, &'a LockType) -> Output where 
-}
-
-fn lock_and_apply<
-    'a,
-    InputType: 'static,
-    OutputType: 'static,
-    FilterType: Filter,
-    MutRefHListType: MutRefHList,
-    GuardType: for<'d> AsMutHList<'a, AsMutType<'d> = MutRefHListType::MutRefHList<'d>>,
-    LockType: Lock<FilterType, LockType<'a> = GuardType>,
-    ItemTransformation: for<'d> Fn(
-            //<<LockType as Lock<FilterType>>::LockType<'a> as AsMutHList<'a>>::AsMutType<'d>,
-            MutRefHListType::MutRefHList<'d>,
-            InputType,
-        ) -> OutputType
-        + Clone,
->(
-    lock: &'a LockType,
-    f: ItemTransformation,
-    input: InputType,
-) -> OutputType {
-    let reffed: &'_ LockType = &lock;
-    let mut guard: <LockType as Lock<FilterType>>::LockType<'_> = reffed.lock();
-    let o = guard.apply_fn(input, f.clone());
-    o
 }
 
 //fn lock_lock_type<
@@ -226,6 +180,7 @@ mod test {
             lock: locks,
             output_stream: empty::<()>(),
             _filter: PhantomData::<HList!(True, True, True)>,
+            _lock_as_mut_ref_hlist: PhantomData::<HList!(String, Vec<char>, HashMap<char, i32>)>,
         };
         type Fltr = HList!(True, True, True);
 
@@ -242,6 +197,6 @@ mod test {
         //         futures::future::ready((lock, f))
         //     })
         //     .await;
-        let run_stream = Node::run(node).await;
+        let _run_stream = Node::run(node).await;
     }
 }
