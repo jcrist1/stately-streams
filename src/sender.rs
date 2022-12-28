@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use frunk::{hlist::HList, HCons, HNil};
 use futures::{
-    future::{ready, Ready},
+    future::{join, ready, Join, Ready},
     pin_mut, Future,
 };
 use tokio::sync::mpsc::{error::SendError, Sender};
@@ -21,13 +21,13 @@ where
     }
 }
 
-impl<Item: Clone + 'static> SenderHList<Item> for HCons<Sender<Item>, HNil> {
-    type SendResult = HCons<Result<(), SendError<Item>>, HNil>;
-    type Joined<'a> = HCons<Pin<Box<dyn Future<Output = Result<(), SendError<Item>>> + 'a>>, HNil>;
+impl<Item: Clone + 'static> SenderHList<Item> for HNil {
+    type SendResult = HNil;
 
-    fn join<'a>(&'a self, item: Item) -> Self::Joined<'a> {
-        let head = Box::pin(self.head.send(item));
-        HCons { head, tail: HNil }
+    type Joined<'a> = HNil;
+
+    fn join<'a>(&'a self, _item: Item) -> Self::Joined<'a> {
+        HNil
     }
 }
 
@@ -38,7 +38,7 @@ impl<H, T: NotNil + HList> NotNil for HCons<H, T> {}
 
 impl<Item: Clone + 'static, TailSender> SenderHList<Item> for HCons<Sender<Item>, TailSender>
 where
-    TailSender: HList + SenderHList<Item> + NotNil,
+    TailSender: HList + SenderHList<Item>,
 {
     type SendResult = HCons<Result<(), SendError<Item>>, TailSender::SendResult>;
     type Joined<'a> = HCons<

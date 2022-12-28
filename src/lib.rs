@@ -4,6 +4,7 @@
 #![feature(associated_type_defaults)]
 mod async_coprod;
 mod async_hlist;
+mod graph;
 mod hierarchical_state;
 mod node;
 mod receiver;
