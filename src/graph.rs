@@ -16,7 +16,7 @@ use crate::{
         ArbitraryFlowStream, AsyncInnerNode, Node, SourceStream, StreamWrapper, UniformFlowStream, Subscription, GetInternalStream, LockInnerNode,
     },
     sender::SenderHList,
-    subscriber::Subscribable, hierarchical_state::{True, False, MutRefHList, Lock, Filter},
+    subscriber::Subscribable, hierarchical_state::{True, False, MutRefHList, Lock, Filter}, util::SafeType,
 };
 
 struct Graph<State, Nodes> {
@@ -216,12 +216,12 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
     fn select_subscribe_with_state<
         NodeFilter: Filter,
         StateFilter: Filter,
-        FilteredNodeOutputs: 'static,
+        FilteredNodeOutputs: SafeType,
         SelectSubscriptionStream: Stream<Item = FilteredNodeOutputs> + 'static,
         FilteredNodesJoinSubscription: SelectSubscribable<SubscriptionStream = SelectSubscriptionStream>,
         FilteredNodes,
-        Output: 'static,
-        FilteredState: MutRefHList + 'static,
+        Output: SafeType,
+        FilteredState: MutRefHList + SafeType,
         F,
     >(
         self,
@@ -254,6 +254,8 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
             Subscriptions = FilteredNodesJoinSubscription,
         >,
         State: Lock<StateFilter, InnerType = FilteredState>,
+        FilteredState: SafeType,
+        FilteredNodeOutputs: SafeType,
         F: for<'a> Fn(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + 'static,
     {
         let Graph { state, nodes } = self;
@@ -278,11 +280,11 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
     }
     fn select_subscribe<
         Filter,
-        FilteredNodeOutputs,
+        FilteredNodeOutputs: SafeType,
         SelectSubscriptionStream: Stream<Item = FilteredNodeOutputs>,
         FilteredNodesJoinSubscription: SelectSubscribable<SubscriptionStream = SelectSubscriptionStream>,
         FilteredNodes,
-        Output,
+        Output: SafeType,
         StreamOutput: Stream<Item = Output>,
         F: FnOnce(SelectSubscriptionStream) -> StreamOutput,
     >(
@@ -336,12 +338,12 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
     fn join_subscribe_with_state<
         NodeFilter: Filter,
         StateFilter: Filter,
-        FilteredNodeOutputs: 'static,
+        FilteredNodeOutputs: SafeType,
         JoinSubscriptionStream: Stream<Item = FilteredNodeOutputs> + 'static,
         FilteredNodesJoinSubscription: JoinSubscribable<SubscriptionStream = JoinSubscriptionStream>,
         FilteredNodes: UniformFlowStreamHList,
-        Output: 'static,
-        FilteredState: MutRefHList + 'static,
+        Output: SafeType,
+        FilteredState: MutRefHList + SafeType,
         F,
     >(
         self,
@@ -361,12 +363,12 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
                     State,
                     JoinSubscriptionStream,
                     FilteredState,
-        Scan<
-            JoinSubscriptionStream,
-            (State, F),
-            Ready<Option<Output>>,
-            fn(&'_ mut (State, F), FilteredNodeOutputs) -> Ready<Option<Output>>,
-        >,
+                    Scan<
+                        JoinSubscriptionStream,
+                        (State, F),
+                        Ready<Option<Output>>,
+                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Ready<Option<Output>>,
+                    >,
                 > as GetInternalStream>::InternalStream,
                 HNil,
             >,
@@ -405,11 +407,11 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
 
     fn join_subscribe<
         Filter,
-        FilteredNodeOutputs,
+        FilteredNodeOutputs: SafeType,
         JoinSubscriptionStream: Stream<Item = FilteredNodeOutputs>,
         FilteredNodesJoinSubscription: JoinSubscribable<SubscriptionStream = JoinSubscriptionStream>,
         FilteredNodes: UniformFlowStreamHList,
-        Output,
+        Output: SafeType,
         StreamOutput: Stream<Item = Output>,
         F: FnOnce(JoinSubscriptionStream) -> StreamOutput,
     >(
