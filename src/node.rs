@@ -1,141 +1,271 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::mpsc::SendError};
 
+use frunk::HNil;
 use futures::{
     future::{ready, Ready},
-    stream::{repeat, Fold, Map, Repeat, Zip},
+    stream::{empty, repeat, Fold, Map, Repeat, Scan, Zip},
     Stream, StreamExt,
 };
 use tokio::sync::mpsc::Receiver;
 
-use crate::hierarchical_state::{AsMutHList, Filter, Lock, MutRefHList};
+use crate::{
+    hierarchical_state::{AsMutHList, Filter, Lock, MutRefHList},
+    sender::SenderHList,
+    subscriber::{Subscribable, SubscriptionOutput},
+};
+
+pub struct UniformFlowStream<Inner>(Inner);
+pub struct ArbitraryFlowStream<Inner>(Inner);
+
+impl<Inner> ArbitraryFlowStream<Inner> {
+    // todo: better type restriction
+    pub fn new(inner: Inner) -> Self {
+        ArbitraryFlowStream(inner)
+    }
+}
+
+pub trait StreamWrapper {
+    type Inner: Stream;
+    fn inner(self) -> Self::Inner;
+}
+
+pub struct SourceStream<Inner>(Inner);
+impl<Inner: Stream> SourceStream<Inner> {
+    pub fn new(inner: Inner) -> Self {
+        Self(inner)
+    }
+}
+
+impl<Inner: Stream> StreamWrapper for SourceStream<Inner> {
+    type Inner = Inner;
+    fn inner(self) -> Self::Inner {
+        self.0
+    }
+}
+impl<Inner: Stream> StreamWrapper for ArbitraryFlowStream<Inner> {
+    type Inner = Inner;
+    fn inner(self) -> Self::Inner {
+        self.0
+    }
+}
+
+impl<Inner: Stream> StreamWrapper for UniformFlowStream<Inner> {
+    type Inner = Inner;
+    fn inner(self) -> Self::Inner {
+        self.0
+    }
+}
+
+pub struct Node<OutputType, Inner, OutputStream> {
+    inner: Inner,
+    output_stream: OutputStream,
+    _output: PhantomData<OutputType>,
+}
+
+impl<OutputType, Inner> Node<OutputType, Inner, HNil> {
+    pub fn new(inner: Inner) -> Self {
+        Node {
+            inner,
+            output_stream: HNil,
+            _output: PhantomData,
+        }
+    }
+}
+
+impl<OutputType, Inner, InnerStream, TailOutput> Node<OutputType, Inner, TailOutput>
+where
+    OutputType: Clone + 'static,
+    TailOutput: Subscribable<OutputType> + SenderHList<OutputType>,
+    Inner: StreamWrapper<Inner = InnerStream>,
+    InnerStream: Stream<Item = OutputType>,
+{
+    pub fn subscribe(
+        self,
+    ) -> Subscription<Node<OutputType, Inner, TailOutput::NewSenders>, Receiver<OutputType>> {
+        let Node {
+            inner,
+            output_stream,
+            ..
+        } = self;
+        let SubscriptionOutput {
+            new_senders,
+            new_subscription,
+        } = output_stream.subscribe();
+        Subscription {
+            node: Node {
+                inner,
+                output_stream: new_senders,
+                _output: PhantomData::<OutputType>,
+            },
+            receiver: new_subscription,
+        }
+    }
+
+    pub async fn run(self) -> usize {
+        self.inner
+            .inner()
+            .then(|output| self.output_stream.send(output))
+            .count()
+            .await
+    }
+}
 
 /// The stream transformation will be a function type taking a stream to a stream
 /// the OutputStream will change as receivers are added.
 ///
-pub struct AsyncNode<InputType, OutputType, StreamTransformation, InputStream, OutputStream> {
-    input: InputStream,
-    transformation: StreamTransformation,
+pub struct AsyncInnerNode<InputType, OutputType, StreamTransformation, InputStream, InternalStream>
+{
+    _input: PhantomData<InputStream>,
+    _transformation: PhantomData<StreamTransformation>,
     _input_type: PhantomData<InputType>,
     _output_type: PhantomData<OutputType>,
-    output_stream: OutputStream,
+    internal_stream: InternalStream,
 }
 
-pub struct LockNode<
-    Filter,
+impl<
+        InputType,
+        InputStream: Stream<Item = InputType>,
+        OutputType,
+        InternalStream: Stream<Item = OutputType>,
+        F: FnOnce(InputStream) -> InternalStream,
+    > AsyncInnerNode<InputType, OutputType, F, InputStream, InternalStream>
+{
+    pub fn new(input_stream: InputStream, f: F) -> Self {
+        AsyncInnerNode {
+            _input: PhantomData,
+            _transformation: PhantomData,
+            _input_type: PhantomData,
+            _output_type: PhantomData,
+            internal_stream: f(input_stream),
+        }
+    }
+}
+
+pub trait GetInternalStream {
+    type InternalStream;
+    fn get_internal_stream(self) -> Self::InternalStream;
+}
+
+impl<InputType, OutputType, StreamTransformation, InputStream, InternalStream> GetInternalStream
+    for AsyncInnerNode<InputType, OutputType, StreamTransformation, InputStream, InternalStream>
+{
+    type InternalStream = ArbitraryFlowStream<InternalStream>;
+    fn get_internal_stream(self) -> Self::InternalStream {
+        ArbitraryFlowStream(self.internal_stream)
+    }
+}
+
+pub struct LockInnerNode<
     InputType,
     OutputType,
     ItemTransformation,
     LockType,
     InputStream,
     LockTypeAsMutRefHList,
-    OutputStream,
+    InternalStream,
 > {
-    input: InputStream,
-    transformation: ItemTransformation,
+    _input: PhantomData<InputStream>,
+    _transformation: PhantomData<ItemTransformation>,
     _input_type: PhantomData<InputType>,
     _output_type: PhantomData<OutputType>,
-    lock: LockType,
+    _lock: PhantomData<LockType>,
     _lock_as_mut_ref_hlist: PhantomData<LockTypeAsMutRefHList>,
-    output_stream: OutputStream,
-    _filter: PhantomData<Filter>,
-}
-
-pub struct Subscription<Node, Receiver> {
-    node: Node,
-    receiver: Receiver,
-}
-
-pub trait Node: Sized {
-    type Input;
-    type Output;
-    type RunStream;
-    fn subscribe(self) -> Subscription<Self, Receiver<Self::Output>>;
-
-    fn run(self) -> Self::RunStream;
+    internal_stream: InternalStream,
 }
 
 impl<
         InputType: 'static,
         OutputType: 'static,
         ItemTransformation: Clone,
-        FilterType: Filter,
         LockType: Clone + 'static,
         InputStream,
         LockTypeAsMutRefHList,
-        OutputStream,
-    > Node
-    for LockNode<
-        FilterType,
+    >
+    LockInnerNode<
         InputType,
         OutputType,
         ItemTransformation,
         LockType,
         InputStream,
         LockTypeAsMutRefHList,
-        OutputStream,
+        Scan<
+            InputStream,
+            (LockType, ItemTransformation),
+            Ready<Option<OutputType>>,
+            fn(&'_ mut (LockType, ItemTransformation), InputType) -> Ready<Option<OutputType>>,
+        >,
     >
 where
     LockTypeAsMutRefHList: MutRefHList,
-    LockType: Lock<FilterType, InnerType = LockTypeAsMutRefHList>,
     ItemTransformation:
         for<'a> Fn(LockTypeAsMutRefHList::MutRefHList<'a>, InputType) -> OutputType + Clone,
     InputStream: Stream<Item = InputType>,
     Self: 'static,
 {
-    type Input = InputType;
-
-    type Output = OutputType;
-
-    type RunStream = Fold<
-        InputStream,
-        Ready<(LockType, ItemTransformation)>,
-        (LockType, ItemTransformation),
-        fn((LockType, ItemTransformation), InputType) -> Ready<(LockType, ItemTransformation)>,
-    >;
-
-    fn subscribe(self) -> Subscription<Self, Receiver<Self::Output>> {
-        todo!()
-    }
-
-    fn run(self) -> Self::RunStream {
-        let lock = self.lock;
-        self.input
-            .fold((lock, self.transformation), |(lock, f), item| {
-                let o = {
-                    let reffed: &'_ LockType = &lock;
-                    let mut guard: <LockType as Lock<FilterType>>::LockType<'_> = reffed.lock();
-                    guard.apply_fn(item, f.clone())
-                    // o
-                };
-                ready((lock, f))
-            })
-        //.map(lock_lock_type)
+    pub fn new<FilterType: Filter>(
+        input_stream: InputStream,
+        lock: LockType,
+        transformation: ItemTransformation,
+    ) -> Self
+    where
+        LockType: Lock<FilterType, InnerType = LockTypeAsMutRefHList>,
+    {
+        LockInnerNode {
+            _input: PhantomData,
+            _transformation: PhantomData,
+            _input_type: PhantomData::<InputType>,
+            _output_type: PhantomData::<OutputType>,
+            _lock: PhantomData,
+            internal_stream: input_stream.scan(
+                (lock.clone(), transformation),
+                |(lock, f), item| {
+                    let o = {
+                        let mut guard = lock.lock();
+                        guard.apply_fn(item, f.clone())
+                    };
+                    ready(Some(o))
+                },
+            ),
+            _lock_as_mut_ref_hlist: PhantomData::<LockTypeAsMutRefHList>,
+        }
     }
 }
 
-//fn lock_lock_type<
-//    InputType: 'static,
-//    OutputType: 'static,
-//    FilterType: Filter,
-//    LockType: Lock<FilterType>,
-//    F: for<'d> Fn(
-//        InputType,
-//        &'d mut <LockType::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
-//    ) -> (
-//        OutputType,
-//        &'d mut <LockType::LockType<'d> as AsMutHList<'d>>::AsMutType<'d>,
-//    ),
-//>(
-//    ((input, lock), f): ((InputType, LockType), F),
-//) -> OutputType {
-//    let mut guard = lock.lock();
-//    let mut mut_ref = guard.mut_ref();
-//    let mut_mut_ref = &mut mut_ref;
-//    let (o, mut_mut_ref) = f(input, mut_mut_ref);
-//    drop(mut_ref);
-//    drop(guard);
-//    o
-//}
+impl<
+        InputType,
+        OutputType,
+        ItemTransformation,
+        LockType,
+        InputStream,
+        LockTypeAsMutRefHList,
+        InternalStream,
+    > GetInternalStream
+    for LockInnerNode<
+        InputType,
+        OutputType,
+        ItemTransformation,
+        LockType,
+        InputStream,
+        LockTypeAsMutRefHList,
+        InternalStream,
+    >
+{
+    type InternalStream = UniformFlowStream<InternalStream>;
+    fn get_internal_stream(self) -> UniformFlowStream<InternalStream> {
+        UniformFlowStream(self.internal_stream)
+    }
+}
+
+impl<Inner> UniformFlowStream<Inner> {
+    pub fn non_uniform(self) -> ArbitraryFlowStream<Inner> {
+        ArbitraryFlowStream(self.0)
+    }
+}
+
+pub struct Subscription<Node, Receiver> {
+    pub node: Node,
+    pub receiver: Receiver,
+}
 
 #[cfg(test)]
 mod test {
@@ -143,23 +273,28 @@ mod test {
 
     use frunk::HNil;
     use frunk::{hlist, hlist_pat, HList};
-    use futures::stream::{empty, iter, repeat};
-    use futures::StreamExt;
+    use futures::future::ready;
+    use futures::stream::{self, empty, iter, repeat};
+    use futures::{join, StreamExt};
+    use tokio::sync::mpsc::Receiver;
+    use tokio_stream::wrappers::ReceiverStream;
 
+    use crate::node::GetInternalStream;
     use crate::util::{new_shared, SharedMutex};
 
-    use super::LockNode;
-    use super::Node;
-    use crate::hierarchical_state::{AsMutHList, Lock, True};
+    use super::{AsyncInnerNode, LockInnerNode};
+    use super::{Node, Subscription};
+    use crate::hierarchical_state::{AsMutHList, False, Lock, True};
+    const ALPHABET_STR: &str = "abcdefghijklmnopqrstuvwxyz";
 
     #[tokio::test]
     async fn test_node_run() {
-        let alphabet = iter("abcdefghijklmnopqrstuvwxyz".chars());
+        let alphabet = iter(ALPHABET_STR.chars());
         let state_1 = new_shared(String::with_capacity(100));
         let state_2: SharedMutex<Vec<char>> = new_shared(Vec::with_capacity(200));
         let state_3: SharedMutex<HashMap<char, i32>> = new_shared(HashMap::new());
 
-        let locks = hlist![state_1, state_2, state_3];
+        let locks = hlist![state_1, state_2, state_3.clone(), state_3];
 
         let process = |hlist_pat![string, vector, hash_map]: HList!(&mut String, &mut Vec<char>, &mut HashMap<char, i32>),
                        input| {
@@ -172,31 +307,69 @@ mod test {
             }
             input
         };
-        let node = LockNode {
-            input: alphabet,
-            transformation: process,
-            _input_type: PhantomData::<char>,
-            _output_type: PhantomData::<char>,
-            lock: locks,
-            output_stream: empty::<()>(),
-            _filter: PhantomData::<HList!(True, True, True)>,
-            _lock_as_mut_ref_hlist: PhantomData::<HList!(String, Vec<char>, HashMap<char, i32>)>,
-        };
-        type Fltr = HList!(True, True, True);
+        type Fltr = HList!(True, True, False, True);
+        let node = LockInnerNode::new::<Fltr>(alphabet, locks.clone(), process);
 
-        // let lock = node.lock;
-        // let (_, _) = node
-        //     .input
-        //     .fold((lock, node.transformation), |(lock, f), item| {
-        //         let o = {
-        //             let mut guard = Lock::<Fltr>::lock(&lock);
-        //             let o = guard.apply_fn(item, f.clone());
-        //             // let _ = guard;
-        //             o
-        //         };
-        //         futures::future::ready((lock, f))
-        //     })
-        //     .await;
-        let _run_stream = Node::run(node).await;
+        let data = node.internal_stream.collect::<Vec<_>>().await;
+        println!("{locks:?}");
+        assert_eq!(data, ALPHABET_STR.chars().collect::<Vec<_>>())
+    }
+
+    #[tokio::test]
+    async fn test_async_node() {
+        let even_alphabet = AsyncInnerNode::new(stream::iter(ALPHABET_STR.chars()), |stream| {
+            stream
+                .enumerate()
+                .filter(|(number, _)| ready(*number % 2 == 0))
+                .map(|(_, chr)| chr)
+        })
+        .internal_stream
+        .collect::<Vec<_>>()
+        .await;
+        assert_eq!(
+            even_alphabet,
+            ALPHABET_STR.chars().step_by(2).collect::<Vec<_>>(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_node_subscription() {
+        let alphabet = iter(ALPHABET_STR.chars());
+        let state_1 = new_shared(String::with_capacity(100));
+        let state_2: SharedMutex<Vec<char>> = new_shared(Vec::with_capacity(200));
+        let state_3: SharedMutex<HashMap<char, i32>> = new_shared(HashMap::new());
+
+        let locks = hlist![state_1, state_2, state_3.clone(), state_3];
+
+        let process = |hlist_pat![string, vector, hash_map]: HList!(&mut String, &mut Vec<char>, &mut HashMap<char, i32>),
+                       input| {
+            string.push(input);
+            vector.push(input);
+            if let Some(count) = hash_map.get_mut(&input) {
+                *count += 1;
+            } else {
+                hash_map.insert(input, 1);
+            }
+            input
+        };
+        type Fltr = HList!(True, True, False, True);
+        let node = Node::new(
+            LockInnerNode::new::<Fltr>(alphabet, locks.clone(), process).get_internal_stream(),
+        );
+
+        let Subscription {
+            node,
+            receiver: receiver1,
+        }: Subscription<_, Receiver<char>> = node.subscribe();
+        let Subscription {
+            node,
+            receiver: receiver2,
+        }: Subscription<_, Receiver<char>> = node.subscribe();
+        let first_run = ReceiverStream::new(receiver1).count();
+        let second_run = ReceiverStream::new(receiver2).count();
+        let (count_1, count_2, count_3) = join!(node.run(), first_run, second_run);
+        println!("{count_1}, {count_2}, {count_3}");
+        assert_eq!(count_1, count_2);
+        assert_eq!(count_1, count_3);
     }
 }
