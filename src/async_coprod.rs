@@ -108,12 +108,6 @@ mod test {
     use futures_timer::Delay;
 
     #[tokio::test]
-    async fn test_anything() {
-        Delay::new(Duration::from_millis(1500)).await;
-        println!("Help");
-        panic!("Help2")
-    }
-    #[tokio::test]
     async fn test_select() {
         type I64StringI8 = Coprod![i64, String, i8];
         println!("starting");

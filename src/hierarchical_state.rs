@@ -1,6 +1,5 @@
 use std::{
     marker::PhantomData,
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::MutexGuard,
 };
@@ -223,26 +222,28 @@ impl<'b, Head: 'static, HeadRef: 'b + AsRef<Head>, Tail: AsRefHList<'b>> AsRefHL
     }
 }
 
-
 pub trait AsMutHList<'a, MutRefHListType: MutRefHList>: 'a + Sized {
     fn mut_ref<'b>(&'b mut self) -> MutRefHListType::MutRefHList<'b>
     where
         'a: 'b;
     fn apply_fn<
+        'b,
         InputType: 'static,
         OutputType: 'static,
         F: Fn(MutRefHListType::MutRefHList<'b>, InputType) -> OutputType,
     >(
-        mut self,
+        &'b mut self,
         input: InputType,
         f: F,
-    ) -> OutputType {
+    ) -> OutputType
+    where
+        'a: 'b,
+    {
         let mut_ref = self.mut_ref();
         let o = f(mut_ref, input);
         o
     }
 }
-
 
 impl<'a> AsMutHList<'a, HNil> for HNil {
     fn mut_ref<'b>(&'b mut self) -> HNil
@@ -257,7 +258,6 @@ impl<'a, Head: 'static, Tail: 'static + MutRefHList, TailGuard: AsMutHList<'a, T
     AsMutHList<'a, HCons<Head, Tail>>
     for HCons<AsMutContainer<std::sync::MutexGuard<'a, Head>, Head>, TailGuard>
 {
-
     fn mut_ref<'b>(&'b mut self) -> HCons<&'b mut Head, Tail::MutRefHList<'b>>
     where
         'a: 'b,
