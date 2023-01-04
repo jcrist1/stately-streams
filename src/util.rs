@@ -1,16 +1,7 @@
-use std::{
-    borrow::BorrowMut,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-    sync::{
-        mpsc::{Receiver, Sender, SyncSender},
-        Arc, Mutex, MutexGuard,
-    },
-    task::Context,
+use std::sync::{
+    mpsc::{Receiver, Sender, SyncSender},
+    Arc, Mutex, MutexGuard,
 };
-
-use frunk::HNil;
-use futures::{Stream, StreamExt};
 
 /// The idea of lock free is that the type is free of primitives that could lock
 /// across threads. This means e.g. the closure captures neither mutexes nor
@@ -39,6 +30,11 @@ impl<T> !LockFree for Sender<T> {}
 impl<T> !LockFree for SyncSender<T> {}
 impl<T> !LockFree for Receiver<T> {}
 
+unsafe impl LockFree for reqwest::Client {}
+// unsafe impl LockFree for tokio::park::Unpark {}
+// unsafe impl LockFree for std::sync::Mutex<hyper::client::pool::PoolInner<hyper::client::client::PoolClient<reqwest::async_impl::body::ImplStream>>> {}
+// unsafe impl LockFree for Mutex<tokio::time::driver::InnerState> {}
+
 pub(crate) trait SafeComputation<I: SafeType, O: SafeType> =
     Fn(I) -> O + Send + Sync + LockFree + 'static;
 
@@ -49,10 +45,10 @@ pub(crate) trait SafeMutRefComputation<I: SafeType, O: SafeType> =
     Fn(&mut I) -> O + Send + Sync + LockFree + 'static;
 
 //todo: add AwaitFree
-pub(crate) trait SafeType = Send + Sync + LockFree + Sized + Clone + 'static;
+pub trait SafeType = Send + Sync + LockFree + Sized + Clone + 'static;
 
 pub(crate) type SharedMutex<T> = Arc<Mutex<T>>;
 
-pub(crate) fn new_shared<T>(t: T) -> SharedMutex<T> {
+pub fn new_shared<T>(t: T) -> SharedMutex<T> {
     Arc::new(Mutex::new(t))
 }

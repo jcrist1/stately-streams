@@ -1,10 +1,10 @@
-use std::{marker::PhantomData, sync::mpsc::SendError};
+use std::marker::PhantomData;
 
 use frunk::HNil;
 use futures::{
     future::{ready, Ready},
-    stream::{empty, repeat, Fold, Map, Repeat, Scan, Zip},
-    Stream, StreamExt,
+    stream::{Scan, Then},
+    Future, Stream, StreamExt,
 };
 use tokio::sync::mpsc::Receiver;
 
@@ -110,6 +110,30 @@ where
     }
 }
 
+pub struct MapAsyncNode<InputType, OutputType, InputStream, InternalStream> {
+    _input: PhantomData<InputStream>,
+    _input_type: PhantomData<InputType>,
+    _output_type: PhantomData<OutputType>,
+    internal_stream: InternalStream,
+}
+
+impl<
+        InputType,
+        InputStream: Stream<Item = InputType>,
+        OutputType,
+        Fut: Future<Output = OutputType>,
+        MapFn: FnMut(InputType) -> Fut,
+    > MapAsyncNode<InputType, OutputType, InputStream, Then<InputStream, Fut, MapFn>>
+{
+    pub fn new(input_stream: InputStream, f: MapFn) -> Self {
+        MapAsyncNode {
+            _input: PhantomData,
+            _input_type: PhantomData,
+            _output_type: PhantomData,
+            internal_stream: input_stream.then(f),
+        }
+    }
+}
 /// The stream transformation will be a function type taking a stream to a stream
 /// the OutputStream will change as receivers are added.
 ///
@@ -152,6 +176,21 @@ impl<InputType, OutputType, StreamTransformation, InputStream, InternalStream> G
     type InternalStream = ArbitraryFlowStream<InternalStream>;
     fn get_internal_stream(self) -> Self::InternalStream {
         ArbitraryFlowStream(self.internal_stream)
+    }
+}
+
+impl<
+        InputType,
+        InputStream: Stream<Item = InputType>,
+        OutputType,
+        Fut: Future<Output = OutputType>,
+        MapFn: FnMut(InputType) -> Fut,
+    > GetInternalStream
+    for MapAsyncNode<InputType, OutputType, InputStream, Then<InputStream, Fut, MapFn>>
+{
+    type InternalStream = UniformFlowStream<Then<InputStream, Fut, MapFn>>;
+    fn get_internal_stream(self) -> Self::InternalStream {
+        UniformFlowStream(self.internal_stream)
     }
 }
 
@@ -198,7 +237,7 @@ impl<
 where
     LockTypeAsMutRefHList: MutRefHList,
     ItemTransformation:
-        for<'a> Fn(LockTypeAsMutRefHList::MutRefHList<'a>, InputType) -> OutputType + Clone,
+        for<'a> FnMut(LockTypeAsMutRefHList::MutRefHList<'a>, InputType) -> OutputType + Clone,
     InputStream: Stream<Item = InputType>,
     Self: 'static,
 {
@@ -221,7 +260,7 @@ where
                 |(lock, f), item| {
                     let o = {
                         let mut guard = lock.lock();
-                        guard.apply_fn(item, f.clone())
+                        guard.apply_fn(item, f)
                     };
                     ready(Some(o))
                 },
@@ -269,12 +308,11 @@ pub struct Subscription<Node, Receiver> {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, marker::PhantomData};
+    use std::collections::HashMap;
 
-    use frunk::HNil;
     use frunk::{hlist, hlist_pat, HList};
     use futures::future::ready;
-    use futures::stream::{self, empty, iter, repeat};
+    use futures::stream::{self, iter};
     use futures::{join, StreamExt};
     use tokio::sync::mpsc::Receiver;
     use tokio_stream::wrappers::ReceiverStream;
@@ -284,7 +322,7 @@ mod test {
 
     use super::{AsyncInnerNode, LockInnerNode};
     use super::{Node, Subscription};
-    use crate::hierarchical_state::{AsMutHList, False, Lock, True};
+    use crate::hierarchical_state::{False, True};
     const ALPHABET_STR: &str = "abcdefghijklmnopqrstuvwxyz";
 
     #[tokio::test]

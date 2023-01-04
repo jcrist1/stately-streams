@@ -1,31 +1,38 @@
-use std::{marker::PhantomData, pin::Pin};
+use std::pin::Pin;
 
 use frunk::{prelude::HList, HCons, HNil};
 use futures::{
-    future::ready,
-    future::{Join, Ready},
-    Future, Stream, stream::Scan,
+    future::Ready,
+    Future, Stream, stream::{Scan, Then},
 };
-use tokio::sync::mpsc::Receiver;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     async_coprod::SelectSubscribable,
     async_hlist::{JoinFuture, JoinSubscribable},
     node::{
-        ArbitraryFlowStream, AsyncInnerNode, Node, SourceStream, StreamWrapper, UniformFlowStream, Subscription, GetInternalStream, LockInnerNode,
+        ArbitraryFlowStream, AsyncInnerNode, Node, SourceStream, StreamWrapper, UniformFlowStream, Subscription, GetInternalStream, LockInnerNode, MapAsyncNode,
     },
     sender::SenderHList,
-    subscriber::Subscribable, hierarchical_state::{True, False, MutRefHList, Lock, Filter}, util::SafeType,
+    subscriber::Subscribable, hierarchical_state::{True, False, MutRefHList, Lock, Filter}, util::{SafeType, LockFree},
 };
 
-struct Graph<State, Nodes> {
+pub struct Graph<State, Nodes> {
     state: State,
     nodes: Nodes,
 }
 
+impl Graph<HNil, HNil> {
+    pub fn empty() -> Self {
+        Self {
+            state: HNil,
+            nodes: HNil,
+        }
+    }
+}
+
 impl<TailState: HList, Nodes> Graph<TailState, Nodes> {
-    fn add_state<HeadState>(self, head: HeadState) -> Graph<HCons<HeadState, TailState>, Nodes> {
+    pub fn add_state<HeadState>(self, head: HeadState) -> Graph<HCons<HeadState, TailState>, Nodes> {
         Graph {
             state: HCons {
                 head,
@@ -37,7 +44,7 @@ impl<TailState: HList, Nodes> Graph<TailState, Nodes> {
 }
 
 impl<State, TailNodes: HList> Graph<State, TailNodes> {
-    fn add_source_node<Item, HeadNode: Stream<Item = Item>>(
+    pub fn add_source_node<Item: SafeType, HeadNode: Stream<Item = Item>>(
         self,
         head: HeadNode,
     ) -> Graph<State, HCons<Node<Item, SourceStream<HeadNode>, HNil>, TailNodes>> {
@@ -51,7 +58,7 @@ impl<State, TailNodes: HList> Graph<State, TailNodes> {
     }
 }
 
-trait UniformFlowStreamHList {}
+pub trait UniformFlowStreamHList {}
 impl UniformFlowStreamHList for HNil {}
 impl<
         OutputType,
@@ -71,7 +78,7 @@ impl<
 {
 }
 
-trait SubscribableHList<Filter> {
+pub trait SubscribableHList<Filter> {
     type NewSubscribedNodes: NodeHList;
     type FilteredNodes;
     type Subscriptions: JoinSubscribable + SelectSubscribable;
@@ -213,7 +220,7 @@ impl<
 }
 
 impl<State: HList, Nodes: HList> Graph<State, Nodes> {
-    fn select_subscribe_with_state<
+    pub fn select_subscribe_with_state<
         NodeFilter: Filter,
         StateFilter: Filter,
         FilteredNodeOutputs: SafeType,
@@ -256,7 +263,7 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
         State: Lock<StateFilter, InnerType = FilteredState>,
         FilteredState: SafeType,
         FilteredNodeOutputs: SafeType,
-        F: for<'a> Fn(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + 'static,
+        F: for<'a> Fn(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + 'static,
     {
         let Graph { state, nodes } = self;
         let (old_nodes_with_new_subscription, subscription): (
@@ -278,7 +285,7 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
             nodes: new_nodes,
         }
     }
-    fn select_subscribe<
+    pub fn select_subscribe<
         Filter,
         FilteredNodeOutputs: SafeType,
         SelectSubscriptionStream: Stream<Item = FilteredNodeOutputs>,
@@ -335,7 +342,7 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
             nodes: new_nodes,
         }
     }
-    fn join_subscribe_with_state<
+    pub fn join_subscribe_with_state<
         NodeFilter: Filter,
         StateFilter: Filter,
         FilteredNodeOutputs: SafeType,
@@ -382,7 +389,7 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
             Subscriptions = FilteredNodesJoinSubscription,
         >,
         State: Lock<StateFilter, InnerType = FilteredState>,
-        F: for<'a> Fn(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + 'static,
+        F: for<'a> FnMut(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + 'static,
     {
         let Graph { state, nodes } = self;
         let (old_nodes_with_new_subscription, subscription): (
@@ -405,7 +412,60 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
         }
     }
 
-    fn join_subscribe<
+    pub fn join_map_async<
+        Filter,
+        FilteredNodeOutputs: SafeType,
+        JoinSubscriptionStream: Stream<Item = FilteredNodeOutputs>,
+        FilteredNodesJoinSubscription: JoinSubscribable<SubscriptionStream = JoinSubscriptionStream>,
+        FilteredNodes: UniformFlowStreamHList,
+        Output: SafeType,
+        Fut: Future<Output = Output> + LockFree, 
+        F: FnMut(FilteredNodeOutputs) -> Fut,
+    >(
+        self,
+        // we have this to make type inference easier. Don't need to specify all type parameters
+        _fltr: Filter,
+        f: F,
+    ) -> Graph<
+        State,
+        HCons<
+            Node<
+                Output,
+                UniformFlowStream
+                <Then<JoinSubscriptionStream, Fut, F>>,
+                HNil,
+            >,
+            <Nodes as SubscribableHList<Filter>>::NewSubscribedNodes,
+        >,
+    >
+    where
+        Nodes: SubscribableHList<
+            Filter,
+            FilteredNodes = FilteredNodes,
+            Subscriptions = FilteredNodesJoinSubscription,
+        >,
+    {
+        let Graph { state, nodes } = self;
+        let (old_nodes_with_new_subscription, subscription): (
+            <Nodes as SubscribableHList<Filter>>::NewSubscribedNodes,
+            _,
+        ) = SubscribableHList::<Filter>::join_subscribe(nodes);
+        let new_node = Node::new(MapAsyncNode::new(
+            subscription.join_subscribe(),
+            f,
+        ).get_internal_stream());
+        let b = new_node;
+        let new_nodes = HCons {
+            head: b,
+            tail: old_nodes_with_new_subscription,
+        };
+        Graph {
+            state,
+            nodes: new_nodes,
+        }
+    }
+
+    pub fn join_subscribe<
         Filter,
         FilteredNodeOutputs: SafeType,
         JoinSubscriptionStream: Stream<Item = FilteredNodeOutputs>,
@@ -413,7 +473,7 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
         FilteredNodes: UniformFlowStreamHList,
         Output: SafeType,
         StreamOutput: Stream<Item = Output>,
-        F: FnOnce(JoinSubscriptionStream) -> StreamOutput,
+        F: FnOnce(JoinSubscriptionStream) -> StreamOutput + LockFree,
     >(
         self,
         // we have this to make type inference easier. Don't need to specify all type parameters
@@ -504,11 +564,6 @@ where
     }
 }
 
-struct NodeSubscription<LockFilter, NodeFilter, Node> {
-    lock_filter: LockFilter,
-    node_filter: NodeFilter,
-    node: Node,
-}
 
 trait NodeSubscriptionHList {}
 
@@ -517,11 +572,10 @@ mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use frunk::{hlist, HList, HNil, hlist_pat, poly_fn};
+    use frunk::{hlist,  HNil, hlist_pat};
+    use futures::future::ready;
     use futures::stream;
-    use futures::stream::{StreamExt, Stream};
-    use crate::node::StreamWrapper;
-    use super::NodeHList;
+    use futures::stream::StreamExt;
 
     use crate::hierarchical_state::False;
     use crate::{util::new_shared, hierarchical_state::True};
@@ -535,6 +589,76 @@ mod test {
     }
     const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+    #[tokio::test]
+    async fn test_no_join_on_non_uniform() {
+
+        let graph = Graph {
+            state: HNil,
+            nodes: HNil,
+        };
+
+
+        let int_stream = stream::iter((0..100).into_iter());
+
+        let graph = graph
+            .add_source_node(int_stream)
+            .join_subscribe(hlist![True], |int_stream| int_stream.filter_map(|hlist_pat!(i)| {
+                if i % 2 == 0 {
+                    ready(Some(i))
+                } else {
+                    ready(None)
+                }
+
+            }))
+            // the following will fail with: 
+            //
+            // rustc: the trait bound `HCons<ArbitraryFlowStream<futures::stream::FilterMap<futures::stream::Map<futures::stream::Zip<ReceiverStream<{integer}>, futures::stream::Repeat<HNil>>, fn(({integer}, HNil)) -> HCons<{integer}, HNil>>, futures::future::Ready<Option<{integer}>>, [closure@src/graph.rs:554:78: 554:93]>>, HCons<SourceStream<futures::stream::Iter<std::ops::Range<{integer}>>>, HNil>>: UniformFlowStreamHList` is not satisfied
+            // the following other types implement trait `UniformFlowStreamHList`:
+            //   HCons<SourceStream<Inner>, TailNodes>
+            //   HCons<UniformFlowStream<Inner>, TailNodes>
+            //
+            // .join_subscribe(hlist!(True, True), |int_int_stream| int_int_stream.map(|hlist_pat!(i, j)| {
+            //     i + j
+            // }))
+            ;
+
+        let data = graph.run().await;
+        println!("{data:#?}");
+    }
+    #[tokio::test]
+    async fn test_mutex_in_stream_doesnt_compile() {
+        let stuff = new_shared(Vec::<String>::new());
+        let people = new_shared(Vec::<Arc<Person>>::new());
+
+        let graph = Graph {
+            state: HNil,
+            nodes: HNil,
+        };
+
+        let _state_stream = stream::repeat(people);
+
+        let int_stream = stream::iter((0..100).into_iter());
+
+        let graph = graph
+            .add_state(stuff)
+            .add_source_node(int_stream)
+            // the below fails with 
+            // rustc: the trait bound `std::sync::Mutex<Vec<Arc<Person>>>: LockFree` is not satisfied in `[closure@src/graph.rs:555:68: 555:113]`
+            // within `[closure@src/graph.rs:555:68: 555:113]`, the trait `LockFree` is not implemented for `std::sync::Mutex<Vec<Arc<Person>>>`
+            // .join_subscribe_with_state(hlist!(True), hlist!(True), move |hlist_pat!(stuff), hlist_pat!(int_inp)| {
+            //     let people = Arc::clone(&people);
+            //     int_inp + 1
+            // });
+            //
+            // The below fails with 
+            // rustc: the trait bound `std::sync::Mutex<Vec<Arc<Person>>>: LockFree` is not satisfied in `Arc<std::sync::Mutex<Vec<Arc<Person>>>>`
+            // required for `Arc<std::sync::Mutex<Vec<Arc<Person>>>>` to implement `util::SafeType`
+            // .add_source_node(_state_stream);
+            ;
+
+        let data = graph.run().await;
+        println!("{data:#?}");
+    }
     /// In this test we don't actually want to do anything with the locks, we just want to test a
     /// traditional deadlock pattern
     #[tokio::test]
@@ -553,19 +677,19 @@ mod test {
             .add_state(stuff)
             .add_state(people.clone())
             .add_source_node(int_stream)
-            .join_subscribe_with_state(hlist!(True), hlist!(True, False), |hlist_pat!(people), hlist_pat!(int_inp)| {
+            .join_subscribe_with_state(hlist!(True), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(int_inp)| {
                 int_inp + 1
             })
-            .join_subscribe_with_state(hlist!(False, True), hlist!(False, True), |hlist_pat!(stuff), hlist_pat!(int_inp)| {
+            .join_subscribe_with_state(hlist!(False, True), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(int_inp)| {
                 int_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False), hlist!(False, True), |hlist_pat!(stuff), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state(hlist!(False, True, False), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(second_stage_inp)| {
                 second_stage_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False, False), hlist!(True, False), |hlist_pat!(people), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state(hlist!(False, True, False, False), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(second_stage_inp)| {
                 second_stage_inp + 1
             })
-            .select_subscribe_with_state(hlist!(True, True, False, False, False), hlist!(True, True), |hlist_pat!(people, stuff), union_type| {
+            .select_subscribe_with_state(hlist!(True, True, False, False, False), hlist!(True, True), |hlist_pat!(_people, _stuff), union_type| {
                 union_type.fold(hlist!(|left_type| format!("{left_type}"), |right_type| format!("{right_type}")))
             });
 
@@ -591,19 +715,19 @@ mod test {
             .add_state(stuff)
             .add_state(people.clone())
             .add_source_node(int_stream)
-            .join_subscribe_with_state(hlist!(True), hlist!(True, False), |hlist_pat!(people), hlist_pat!(int_inp)| {
+            .join_subscribe_with_state(hlist!(True), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(int_inp)| {
                 int_inp + 1
             })
-            .join_subscribe_with_state(hlist!(False, True), hlist!(False, True), |hlist_pat!(stuff), hlist_pat!(int_inp)| {
+            .join_subscribe_with_state(hlist!(False, True), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(int_inp)| {
                 int_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False), hlist!(False, True), |hlist_pat!(stuff), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state(hlist!(False, True, False), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(second_stage_inp)| {
                 second_stage_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False, False), hlist!(True, False), |hlist_pat!(people), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state(hlist!(False, True, False, False), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(second_stage_inp)| {
                 second_stage_inp + 1
             })
-            .join_subscribe_with_state(hlist!(True, True, False, False, False), hlist!(True, True), |hlist_pat!(people, stuff), hlist_pat!(third_stage_inp_left, third_stage_inp_right)| {
+            .join_subscribe_with_state(hlist!(True, True, False, False, False), hlist!(True, True), |hlist_pat!(_people, _stuff), hlist_pat!(third_stage_inp_left, third_stage_inp_right)| {
                 third_stage_inp_right + third_stage_inp_left
             });
 
