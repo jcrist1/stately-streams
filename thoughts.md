@@ -156,13 +156,17 @@ Another issue that came up is when developing, I tried to do too much in one ste
 and it was greatly simplified by moving more pieces into separate steps in the DAG.
 
 # Tests
-I attempted to provide some simple tests which illustrate various features
+I attempted to provide some simple tests which illustrate various features. I hesitate to call these test, as they are merely compiling tests that run,
+however they include commented code that when uncommented to fail to compile.
 ## non-uniform join
-A test 
+A test to verify that a graph with two uneven paths can't be joined in `graph::test::test_no_join_on_non_uniform`.
 ## diamond lock
+We test that if we have two mutexes, and two paths, locking them in different order doesn't deadlock, either in uniform or non-uniform flows:
+`graph::test::{test_diamond_lock_select, test_diamond_lock}`
 ## await while holding lock
 All function types are required to be `LockFree`, which (should) prohibit the existence of locking primitives in them.
-This came up by surprise when I was implementing the example
+This was proven nicely by surprise when I was implementing the example code when I discovered that there are mutexes
+in multiple places in sqlx (which in retrospect is not surprising). This is tested in `graph::test::test_mutex_in_stream_doesnt_compile`
 
 
 
