@@ -1,3 +1,4 @@
+# Thoughts from 2023-01
 When I first started messing around with Rust some three-odd years back, I leaped at the fearless concurrency, and immediately 
 coded up some nonsense shuffling stuff between threads. It didn't take long, however, to cause some deadlocks with mutexes.
 Don't get me wrong, I was absolutely enamored by Rust's promises, and it fully delivered on those, but I was immediately
@@ -21,12 +22,19 @@ that tries to guarantee deadlock free computation while allowine access to share
 
 Some features of this library:
 * Disallow locking primitives in streams being composed
+  * this is done via the `LockFree` auto trait, which prevents locking primitives from being used in function types for the DAG
 * Composition of streams as a DAG
+  * all composition uses a Boolean HList, to filter previous nodes in the DAG as inputs for the current node
 * Shared mutable state with guaranteed lock order
+  * state is added to the DAG, and can be filtered via a similar subset mechanism. The lock order is is global
 * backpressure via finite tokio mpsc channels
+  * values are passed between nodes via bounded async channels with capacity 2
 * distinction between arbitrary stream transformations and transformations which guarantee a uniform progress 
+  * We introduce a trait which guarantees that the filtered nodes will flow at a uniform rate: `UniformFlowHList`
 * Support select merging arbitrary nodes in the graph as input for new nodes
+  * for looser graph structure where we don't care about order, and consistent flow we allow select merging using frunks CoProduct
 * and join merginging  nodes with the uniform flow guarantee
+  * to avoid deadlocks from flows with different flow rates and shared parent nodes join merging is only supported with nodes satisfying the above trait
 
 Most of these features make extensive use of Rust's ownership model and type system, and I have a hard time envisioning in being possible in other languages, 
 without ownership semantics.
@@ -36,10 +44,18 @@ recursive traits which this library makes prolific use of, as well as the [frunk
 This means that highly confusing trait bound abound within. I am currently missing all documentation, but will slowly endeavour
 to improve it. I have not formally proven that this library doesn't deadlock (and as is I don't think it does), but I believe
 the recursive types and traits should allow proofs to be developed. But I think the formal proofs would actually reveal what additional
-trait bounds are required. For now let us examine a couple of common deadlocks, and see how we avoid them
+trait bounds are required.
+
 ## basic graph construction
 
-Failed to use sqlx because of multiple mutexes in various types:
+I have provided an example which makes use of sqlx and in memory representations to calculate user profiles with exponential decay as a toy example.
+```sh
+cargo run --release --example transaction_in_mem
+```
+The example makes use of lock guarantees via the DAG.
+
+What I noticed while implementing it is that in practice many asynchronous libraries use mutexes to manage shared resources, which may be incorporated into the futures of those libraries.
+My original example failed to use sqlx because of multiple mutexes in various types:
 ```rust
   .join_map_async(
       hlist![True, False],
@@ -105,7 +121,42 @@ required because it appears within the type `&Arc<Pool<Postgres>>`
 rustc: the trait bound `(dyn DatabaseError + 'static): LockFree` is not satisfied in `impl futures::Future<Output = Result<(), Error>>`
 within `impl futures::Future<Output = Result<(), Error>>`, the trait `LockFree` is not implemented for `(dyn DatabaseError + 'static)`](images/sqlx-not-lockfree-type-error.png)
 
+The solution for this was to implement a wrapper type for futures that allows unsafe declaration of lock free behaviour.
+In this case the programmer promises that the stream is not messing around with mutexes in the future:
+```rust
+#[pin_project]
+struct UnsafeLockFreeFut<Fut>(#[pin] Fut);
 
+impl<F: Future> UnsafeLockFreeFut<F> {
+    unsafe fn new(f: F) -> Self {
+        Self(f)
+    }
+}
+
+unsafe impl<Fut> LockFree for UnsafeLockFreeFut<Fut> {}
+
+impl<Fut, Output> Future for UnsafeLockFreeFut<Fut>
+where
+    Fut: Future<Output = Output>,
+{
+    type Output = Output;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.project();
+        this.0.poll(cx)
+    }
+}
+```
+This can probably move to the library.
+
+Another issue that came up is when developing, I tried to do too much in one step, 
+and it was greatly simplified by moving more pieces into separate steps in the DAG.
+
+# Tests
+I attempted to provide some simple tests which illustrate various features
 ## non-uniform join
 ## diamond lock
 ## await while holding lock
@@ -115,10 +166,12 @@ within `impl futures::Future<Output = Result<(), Error>>`, the trait `LockFree` 
 Current shortcomings
 * we don't exclude putting multiple clones of a single lock, which can trigger deadlock
 * agressively avoid lifetimes in primitives; most types require `'static`
-* missing common deadlock capable structs from library ecosystem (parking lot and tokio mutexes, dahmap)
+* missing common deadlock capable structs from library ecosystem (parking lot and tokio mutexes, dashmap, RWLocks)
 * frunk structs may not have efficient layouts
 * Unecessary copy of stream when node has only one subscriber
 * formal specification and proof of guarantees
+* no support for RWLocks which would allow better parallelism
+* feels quite heavyweight with lots of channels, and clones
 * ...?
 
 

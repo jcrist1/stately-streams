@@ -256,7 +256,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    const EVENTS: usize = 1_000_000;
+    const EVENTS: usize = 10_000_000;
     let exp = rand_distr::Exp::new(0.001)?; //  ::distributions:: Exponential::new(1000.0);
     let now = OffsetDateTime::now_utc();
     let dates = (0..EVENTS)
