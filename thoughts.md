@@ -26,7 +26,7 @@ Some features of this library:
 * Composition of streams as a DAG
   * all composition uses a Boolean HList, to filter previous nodes in the DAG as inputs for the current node
 * Shared mutable state with guaranteed lock order
-  * state is added to the DAG, and can be filtered via a similar subset mechanism. The lock order is is global
+  * state is added to the DAG, and can be filtered via a similar subset mechanism. The lock order is global
 * backpressure via finite tokio mpsc channels
   * values are passed between nodes via bounded async channels with capacity 2
 * distinction between arbitrary stream transformations and transformations which guarantee a uniform progress 
@@ -52,9 +52,9 @@ I have provided an example which makes use of sqlx and in memory representations
 ```sh
 cargo run --release --example transaction_in_mem
 ```
-The example makes use of lock guarantees via the DAG.
+The example makes use of transaction guarantees via the DAG: we can ensure that an object is in memory and that a later flow step cannot change the state by binding to the initial source stream.
 
-What I noticed while implementing it is that in practice many asynchronous libraries use mutexes to manage shared resources, which may be incorporated into the futures of those libraries.
+What I noticed while implementing it is that in practice many asynchronous libraries use mutexes to manage shared resources, which may be incorporated into the futures those libraries generate.
 My original example failed to use sqlx because of multiple mutexes in various types:
 ```rust
   .join_map_async(
@@ -150,7 +150,7 @@ where
     }
 }
 ```
-This can probably move to the library.
+This will probably move to the library.
 
 Another issue that came up is when developing, I tried to do too much in one step, 
 and it was greatly simplified by moving more pieces into separate steps in the DAG.
