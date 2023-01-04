@@ -184,7 +184,66 @@ in multiple places in sqlx (which in retrospect is not surprising). This is test
 * no ergonomic support for failable streams (e.g. no early termination, retries, ...?)
 * probably much more ...?
 
+# (Dis-)honorable notes:
+As mentioned, this makes extensive use of inductive reasoning, via traits, which leads to rather monstrous type constraints:
+e.g. this function declaration which is 2.5 times longer than the function body:
+```rust
+    pub fn join_subscribe_with_state<
+        NodeFilter: Filter,
+        StateFilter: Filter,
+        FilteredNodeOutputs: SafeType,
+        JoinSubscriptionStream: Stream<Item = FilteredNodeOutputs> + 'static,
+        FilteredNodesJoinSubscription: JoinSubscribable<SubscriptionStream = JoinSubscriptionStream>,
+        FilteredNodes: UniformFlowStreamHList,
+        Output: SafeType,
+        FilteredState: MutRefHList + SafeType,
+        F,
+    >(
+        self,
+        // we have this to make type inference easier. Don't need to specify all type parameters
+        _state_flter: StateFilter,
+        _fltr: NodeFilter,
+        f: F,
+    ) -> Graph<
+        State,
+        HCons<
+            Node<
+                Output,
+                <LockInnerNode<
+                    FilteredNodeOutputs,
+                    Output,
+                    F,
+                    State,
+                    JoinSubscriptionStream,
+                    FilteredState,
+                    Scan<
+                        JoinSubscriptionStream,
+                        (State, F),
+                        Ready<Option<Output>>,
+                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Ready<Option<Output>>,
+                    >,
+                > as GetInternalStream>::InternalStream,
+                HNil,
+            >,
+            <Nodes as SubscribableHList<NodeFilter>>::NewSubscribedNodes,
+        >,
+    >
+    where
+        Nodes: SubscribableHList<
+            NodeFilter,
+            FilteredNodes = FilteredNodes,
+            Subscriptions = FilteredNodesJoinSubscription,
+        >,
+        State: Lock<StateFilter, InnerType = FilteredState>,
+        F: for<'a> FnMut(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + 'static,
+    {
+    ...
+    }
+```
+which my friend has dubbed
+> I hereby declare this the spookiest shit I've seen in rust
 
+which I take a certain dubious pride in.
 
 
 
