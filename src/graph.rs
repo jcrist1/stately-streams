@@ -233,8 +233,8 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
     >(
         self,
         // we have this to make type inference easier. Don't need to specify all type parameters
-        _fltr: NodeFilter,
         _state_flter: StateFilter,
+        _fltr: NodeFilter,
         f: F,
     ) -> Graph<
         State,
@@ -355,8 +355,8 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
     >(
         self,
         // we have this to make type inference easier. Don't need to specify all type parameters
-        _fltr: NodeFilter,
         _state_flter: StateFilter,
+        _fltr: NodeFilter,
         f: F,
     ) -> Graph<
         State,
@@ -677,19 +677,19 @@ mod test {
             .add_state(stuff)
             .add_state(people.clone())
             .add_source_node(int_stream)
-            .join_subscribe_with_state(hlist!(True), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(int_inp)| {
+            .join_subscribe_with_state(hlist!(True, False), hlist!(True), |hlist_pat!(_people), hlist_pat!(int_inp)| {
                 int_inp + 1
             })
             .join_subscribe_with_state(hlist!(False, True), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(int_inp)| {
                 int_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state( hlist!(False, True), hlist!(False, True, False),|hlist_pat!(_stuff), hlist_pat!(second_stage_inp)| {
                 second_stage_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False, False), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state(hlist!(True, False), hlist!(False, True, False, False), |hlist_pat!(_people), hlist_pat!(second_stage_inp)| {
                 second_stage_inp + 1
             })
-            .select_subscribe_with_state(hlist!(True, True, False, False, False), hlist!(True, True), |hlist_pat!(_people, _stuff), union_type| {
+            .select_subscribe_with_state(hlist!(True, True), hlist!(True, True, False, False, False), |hlist_pat!(_people, _stuff), union_type| {
                 union_type.fold(hlist!(|left_type| format!("{left_type}"), |right_type| format!("{right_type}")))
             });
 
@@ -715,19 +715,19 @@ mod test {
             .add_state(stuff)
             .add_state(people.clone())
             .add_source_node(int_stream)
-            .join_subscribe_with_state(hlist!(True), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(int_inp)| {
+            .join_subscribe_with_state(hlist!(True, False), hlist!(True), |hlist_pat!(_people), hlist_pat!(int_inp)| {
                 int_inp + 1
             })
             .join_subscribe_with_state(hlist!(False, True), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(int_inp)| {
                 int_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False), hlist!(False, True), |hlist_pat!(_stuff), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state(hlist!(False, True), hlist!(False, True, False), |hlist_pat!(_stuff), hlist_pat!(second_stage_inp)| {
                 second_stage_inp - 1
             })
-            .join_subscribe_with_state(hlist!(False, True, False, False), hlist!(True, False), |hlist_pat!(_people), hlist_pat!(second_stage_inp)| {
+            .join_subscribe_with_state(hlist!(True, False), hlist!(False, True, False, False), |hlist_pat!(_people), hlist_pat!(second_stage_inp)| {
                 second_stage_inp + 1
             })
-            .join_subscribe_with_state(hlist!(True, True, False, False, False), hlist!(True, True), |hlist_pat!(_people, _stuff), hlist_pat!(third_stage_inp_left, third_stage_inp_right)| {
+            .join_subscribe_with_state(hlist!(True, True), hlist!(True, True, False, False, False), |hlist_pat!(_people, _stuff), hlist_pat!(third_stage_inp_left, third_stage_inp_right)| {
                 third_stage_inp_right + third_stage_inp_left
             });
 
@@ -767,7 +767,7 @@ mod test {
                 async move {compare <= 10}
             })
             )
-            .join_subscribe_with_state(hlist!(False, False, True, True), hlist!(False, True, True), |hlist_pat!(people, stuff), hlist_pat!(char_inp, int_inp)| {
+            .join_subscribe_with_state(hlist!(False, True, True), hlist!(False, False, True, True), |hlist_pat!(people, stuff), hlist_pat!(char_inp, int_inp)| {
                 let name_opt = match char_inp {
                     'A' => Some("Alice".to_owned()),
                     'B' => Some("Bob".to_owned()),

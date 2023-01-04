@@ -158,13 +158,17 @@ and it was greatly simplified by moving more pieces into separate steps in the D
 # Tests
 I attempted to provide some simple tests which illustrate various features
 ## non-uniform join
+A test 
 ## diamond lock
 ## await while holding lock
+All function types are required to be `LockFree`, which (should) prohibit the existence of locking primitives in them.
+This came up by surprise when I was implementing the example
 
 
 
-Current shortcomings
+# Current shortcomings
 * we don't exclude putting multiple clones of a single lock, which can trigger deadlock
+  * A potential solution is to make adding state outside of a mutex safe, and adding state in a mutex unsafe
 * agressively avoid lifetimes in primitives; most types require `'static`
 * missing common deadlock capable structs from library ecosystem (parking lot and tokio mutexes, dashmap, RWLocks)
 * frunk structs may not have efficient layouts
@@ -172,7 +176,9 @@ Current shortcomings
 * formal specification and proof of guarantees
 * no support for RWLocks which would allow better parallelism
 * feels quite heavyweight with lots of channels, and clones
-* ...?
+* there is no ergonomic to subscribe to the output of the graph, or retrieve the state.
+* no ergonomic support for failable streams (e.g. no early termination, retries, ...?)
+* probably much more ...?
 
 
 

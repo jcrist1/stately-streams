@@ -1,5 +1,4 @@
 use std::{
-    cmp::Reverse,
     collections::{BTreeMap, BTreeSet, HashMap},
     iter::once,
     sync::{Arc, Mutex},
@@ -7,7 +6,7 @@ use std::{
 
 use anyhow::anyhow;
 use frunk::{hlist, hlist_pat};
-use futures::{future::ready, stream, Future};
+use futures::{stream, Future};
 use pin_project::pin_project;
 use rand::{distributions::Uniform, prelude::*, thread_rng};
 use serde::Deserialize;
@@ -328,8 +327,8 @@ async fn main() -> anyhow::Result<()> {
         .add_source_node(stream::iter(personalisation_events.into_iter()))
         // insert
         .join_subscribe_with_state(
-            hlist![True],
             hlist![False, False, False, True],
+            hlist![True],
             move |hlist_pat![users], hlist_pat![event_arc]| {
                 if counter % 10_000 == 0 {
                     println!("Processing event {counter}");
@@ -386,8 +385,8 @@ async fn main() -> anyhow::Result<()> {
         )
         // store user if missing, and store userscores
         .join_subscribe_with_state(
-            hlist![True, False, True],
             hlist![False, False, True, False],
+            hlist![True, False, True],
             |hlist_pat![personalisation_events],
              hlist_pat![user_inserted, user_event]|
              -> Result<Arc<PersonalisationEvent>, Error> {
@@ -412,8 +411,8 @@ async fn main() -> anyhow::Result<()> {
             },
         )
         .join_subscribe_with_state(
-            hlist![False, True, False, False],
             hlist![False, False, False, True],
+            hlist![False, True, False, False],
             |
              hlist_pat![users],hlist_pat![user_to_insert] | -> Result<(), Error> {
                  if let (Some(user), _) =  user_to_insert? {
@@ -423,8 +422,8 @@ async fn main() -> anyhow::Result<()> {
              }
         )
         .join_subscribe_with_state(
-            hlist![False, True, True, False, True],
             hlist![True, True, True, False],
+            hlist![False, True, True, False, True],
             |hlist_pat![users_view, topic_view, personalisation_events],
              hlist_pat![_user_inserted, user_for_insert, event]| -> Result<(), Error> {
                  insert(users_view, topic_view, personalisation_events, user_for_insert, event.as_ref())

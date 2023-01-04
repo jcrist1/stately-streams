@@ -340,15 +340,24 @@ mod test {
         let state_2 = new_shared(Some(String::from("boop")));
         let state_3 = new_shared(0.32);
         let state = hlist!(state_1, state_2, state_3);
-        println!("Starting first lock");
-        let hlist_pat![_guard_1, _guard_2, _guard_3] =
-            Lock::<HList![True, True, True]>::lock(&state);
-        println!("Starting second lock");
-        let hlist_pat![_guard_1, _guard_2] = Lock::<HList![True, True, False]>::lock(&state);
-        let hlist_pat![_guard_1, _guard_2, _guard_3] = Lock::<
-            <HList![True, True, False] as BoolAlg<HList![False, True, True]>>::Or,
-        >::lock(&state);
-        // this doesn't compile
-        // let hlist_pat![guard_1, guard_2] = Lock::<HList![True, False, False]>::lock(&state);
+        {
+            println!("Starting first lock");
+            let hlist_pat![_guard_1, _guard_2, _guard_3] =
+                Lock::<HList![True, True, True]>::lock(&state);
+        }
+        {
+            println!("Starting second lock");
+            let hlist_pat![_guard_1, _guard_2] = Lock::<HList![True, True, False]>::lock(&state);
+        }
+        {
+            println!("Starting third lock");
+            let hlist_pat![_guard_1, _guard_2, _guard_3] = Lock::<
+                <HList![True, True, False] as BoolAlg<HList![False, True, True]>>::Or,
+            >::lock(&state);
+        }
+        {
+            // this doesn't compile
+            // let hlist_pat![guard_1, guard_2] = Lock::<HList![True, False, False]>::lock(&state);
+        }
     }
 }
