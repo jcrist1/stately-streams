@@ -253,8 +253,8 @@ Another issue that came up is when developing, I tried to do too much in one ste
 and it was greatly simplified by moving more pieces into separate steps in the DAG.
 
 # Tests
-I attempted to provide some simple tests which illustrate various features. I hesitate to call these test, as they are merely compiling tests that run,
-however they include commented code that when uncommented to fail to compile.
+I attempted to provide some simple tests which illustrate various features. I hesitate to call these tests, as I wrote them to merely test that the test compiles,
+however they include commented code that when uncommented causes the test to fail to compile.
 ## non-uniform join
 A test to verify that a graph with two uneven paths can't be joined in `graph::test::test_no_join_on_non_uniform`.
 ## diamond lock
