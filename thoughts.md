@@ -257,6 +257,8 @@ I attempted to provide some simple tests which illustrate various features. I he
 however they include commented code that when uncommented causes the test to fail to compile.
 ## non-uniform join
 A test to verify that a graph with two uneven paths can't be joined in `graph::test::test_no_join_on_non_uniform`.
+The corresponding failure mode would be that we attempt to take a stream, send it down two channels, filter every other element of the second channel,
+and then join the streams from the channels.
 ## diamond lock
 We test that if we have two mutexes, and two paths, locking them in different order doesn't deadlock, either in uniform or non-uniform flows:
 `graph::test::{test_diamond_lock_select, test_diamond_lock}`
