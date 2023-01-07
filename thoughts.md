@@ -145,8 +145,16 @@ that it should be okay to pass around within the graph (or hold as state)
 ## basic graph construction
 
 I have provided an example which makes use of sqlx and in memory representations to calculate user profiles with exponential decay as a toy example.
+You will need a running postgres instance, which can be spun up with 
 ```sh
-
+docker-compose up -d postgres
+```
+then run migrations
+```sh
+sqlx migrate run
+```
+and finally 
+```sh
 cargo run --release --example transaction_in_mem
 ```
 The example makes use of transaction guarantees via the DAG: we can ensure that an object is in memory and that a later flow step cannot change the state by binding to the initial source stream.
