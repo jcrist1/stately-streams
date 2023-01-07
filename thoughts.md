@@ -77,7 +77,7 @@ graph.join_subscribe_with_state(
 )
 ```
 
-If we look at the type parameters, signature, and constraints of the method:
+To get a taste of how it works, consider an example method:
 ```rust
     pub fn join_subscribe_with_state<
         NodeFilter: Filter,
@@ -131,7 +131,7 @@ If we look at the type parameters, signature, and constraints of the method:
     ...
 }
 ```
-Let's look at the traits in the type constraints
+Most of the engineering is in the traits and type constraints. Let's look at those:
 * `Filter` is for types which are HLists of `TypeBool` types
 * `SafeType` is `LockFree + Clone + Send + Sync + Sized + 'static`, and is supposed to capture a the idea of a "simple" or "safe" type,
 that it should be okay to pass around within the graph (or hold as state)
@@ -268,6 +268,7 @@ in multiple places in sqlx (which in retrospect is not surprising). This is test
 
 
 # Current shortcomings
+* tests of all graph construction functions
 * we don't exclude putting multiple clones of a single lock, which can trigger deadlock
   * A potential solution is to make adding state outside of a mutex safe, and adding state in a mutex unsafe
 * agressively avoid lifetimes in primitives; most types require `'static`
@@ -278,66 +279,17 @@ in multiple places in sqlx (which in retrospect is not surprising). This is test
 * no support for RWLocks which would allow better parallelism
 * feels quite heavyweight with lots of channels, and clones
 * there is no ergonomic to subscribe to the output of the graph, or retrieve the state.
-* no ergonomic support for failable streams (e.g. no early termination, retries, ...?)
+* no ergonomic support for fallible streams (e.g. no early termination, retries, ...?)
 * probably much more ...?
 
 # (Dis-)honorable notes:
-As mentioned, this makes extensive use of inductive reasoning, via traits, which leads to rather monstrous type constraints:
-e.g. this function declaration which is 2.5 times longer than the function body:
+As mentioned, this makes extensive use of inductive reasoning, via traits. The type parameters, constraints and signature of
 ```rust
-    pub fn join_subscribe_with_state<
-        NodeFilter: Filter,
-        StateFilter: Filter,
-        FilteredNodeOutputs: SafeType,
-        JoinSubscriptionStream: Stream<Item = FilteredNodeOutputs> + 'static,
-        FilteredNodesJoinSubscription: JoinSubscribable<SubscriptionStream = JoinSubscriptionStream>,
-        FilteredNodes: UniformFlowStreamHList,
-        Output: SafeType,
-        FilteredState: MutRefHList + SafeType,
-        F,
-    >(
-        self,
-        // we have this to make type inference easier. Don't need to specify all type parameters
-        _state_flter: StateFilter,
-        _fltr: NodeFilter,
-        f: F,
-    ) -> Graph<
-        State,
-        HCons<
-            Node<
-                Output,
-                <LockInnerNode<
-                    FilteredNodeOutputs,
-                    Output,
-                    F,
-                    State,
-                    JoinSubscriptionStream,
-                    FilteredState,
-                    Scan<
-                        JoinSubscriptionStream,
-                        (State, F),
-                        Ready<Option<Output>>,
-                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Ready<Option<Output>>,
-                    >,
-                > as GetInternalStream>::InternalStream,
-                HNil,
-            >,
-            <Nodes as SubscribableHList<NodeFilter>>::NewSubscribedNodes,
-        >,
-    >
-    where
-        Nodes: SubscribableHList<
-            NodeFilter,
-            FilteredNodes = FilteredNodes,
-            Subscriptions = FilteredNodesJoinSubscription,
-        >,
-        State: Lock<StateFilter, InnerType = FilteredState>,
-        F: for<'a> FnMut(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + 'static,
-    {
-    ...
-    }
+    pub fn join_subscribe_with_state<...>(...
+
 ```
-which my friend has dubbed
+are 2.5 times longer than the body.
+My friend said of this
 > I hereby declare this the spookiest shit I've seen in rust
 
 which I take a certain dubious pride in.
