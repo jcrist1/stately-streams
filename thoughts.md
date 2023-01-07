@@ -145,8 +145,16 @@ that it should be okay to pass around within the graph (or hold as state)
 ## basic graph construction
 
 I have provided an example which makes use of sqlx and in memory representations to calculate user profiles with exponential decay as a toy example.
+You will need a running postgres instance, which can be spun up with 
 ```sh
-
+docker-compose up -d postgres
+```
+then run migrations
+```sh
+sqlx migrate run
+```
+and finally 
+```sh
 cargo run --release --example transaction_in_mem
 ```
 The example makes use of transaction guarantees via the DAG: we can ensure that an object is in memory and that a later flow step cannot change the state by binding to the initial source stream.
@@ -253,10 +261,12 @@ Another issue that came up is when developing, I tried to do too much in one ste
 and it was greatly simplified by moving more pieces into separate steps in the DAG.
 
 # Tests
-I attempted to provide some simple tests which illustrate various features. I hesitate to call these test, as they are merely compiling tests that run,
-however they include commented code that when uncommented to fail to compile.
+I attempted to provide some simple tests which illustrate various features. I hesitate to call these tests, as I wrote them to merely test that the test compiles,
+however they include commented code that when uncommented causes the test to fail to compile.
 ## non-uniform join
 A test to verify that a graph with two uneven paths can't be joined in `graph::test::test_no_join_on_non_uniform`.
+The corresponding failure mode would be that we attempt to take a stream, send it down two channels, filter every other element of the second channel,
+and then join the streams from the channels.
 ## diamond lock
 We test that if we have two mutexes, and two paths, locking them in different order doesn't deadlock, either in uniform or non-uniform flows:
 `graph::test::{test_diamond_lock_select, test_diamond_lock}`
