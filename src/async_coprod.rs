@@ -1,14 +1,10 @@
-use futures::future::{
-    pending, select as fu_select, Either, Map as FuMap, Pending, Select as FuSelect,
-};
-
 use frunk::coproduct::CNil;
 use frunk::{coproduct::Coproduct, HCons, HNil};
 
 use futures::stream::{empty, select as s_select, Empty};
 use futures::stream::{Map as SMap, Select as SSelect};
+use futures::StreamExt;
 use futures::{Future, Stream};
-use futures::{FutureExt, StreamExt};
 
 pub trait SelectSubscribable {
     type SubscribedItems;
@@ -59,42 +55,6 @@ pub trait SelectFuture {
 
     fn select_fut(self) -> Self::SelectFuture;
 }
-//
-//impl SelectFuture for HNil {
-//    type SelectOutput = CNil;
-//    type SelectFuture = Pending<CNil>;
-//    fn select_fut(self) -> Pending<CNil> {
-//        pending()
-//    }
-//}
-//
-//fn either_to_coprod<L, R>(either: Either<L, R>) -> Coproduct<L, R> {
-//    match either {
-//        Either::Left(l) => left(l),
-//        Either::Right(r) => right(r),
-//    }
-//}
-//
-//impl<HeadFuture, TailSelect, TailSelectFuture, HeadOutput, TailOutput> SelectFuture
-//    for HCons<HeadFuture, TailSelect>
-//where
-//    HeadFuture: Future<Output = HeadOutput> + Unpin,
-//    TailSelect: SelectFuture<SelectOutput = TailOutput, SelectFuture = TailSelectFuture>,
-//    TailSelectFuture: Future<Output = TailOutput> + Unpin,
-//{
-//    type SelectOutput = Coproduct<HeadOutput, TailOutput>;
-//    type SelectFuture = FuMap<
-//        FuSelect<HeadFuture, TailSelect::SelectFuture>,
-//        fn(Either<HeadOutput, TailOutput>) -> Coproduct<HeadOutput, TailOutput>,
-//    >;
-//
-//    fn select_fut(self) -> Self::SelectFuture {
-//        let HCons { mut head, tail } = self;
-//
-//        let tail = tail.select_fut();
-//        FutureExt::map(fu_select(head, tail), either_to_coprod)
-//    }
-//}
 
 #[cfg(test)]
 mod test {

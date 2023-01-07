@@ -1,10 +1,7 @@
 use std::pin::Pin;
 
 use frunk::{hlist::HList, HCons, HNil};
-use futures::{
-    future::{join, ready, Join, Ready},
-    pin_mut, Future,
-};
+use futures::Future;
 use tokio::sync::mpsc::{error::SendError, Sender};
 
 use crate::async_hlist::JoinFuture;
@@ -60,9 +57,7 @@ where
 #[cfg(test)]
 mod test {
     use frunk::hlist;
-    use futures::{FutureExt, StreamExt};
     use tokio::sync::mpsc::channel;
-    use tokio_stream::wrappers::ReceiverStream;
 
     use crate::async_hlist::JoinFuture;
 

@@ -1,8 +1,4 @@
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-    sync::MutexGuard,
-};
+use std::{marker::PhantomData, ops::DerefMut, sync::MutexGuard};
 
 use frunk::{hlist::HList, HCons, HNil};
 
@@ -29,10 +25,6 @@ impl TypeBool for False {
     fn bool() -> bool {
         false
     }
-}
-
-fn or<T: TypeBool>(_t: T) -> True {
-    True
 }
 
 trait InductiveStateSubset {}
@@ -185,6 +177,7 @@ struct AsRefContainer<RefType, Type> {
 }
 
 impl<Type, RefType: AsRef<Type>> AsRefContainer<RefType, Type> {
+    #[allow(dead_code)]
     fn new(t: RefType) -> AsRefContainer<RefType, Type> {
         AsRefContainer {
             item: t,
@@ -230,11 +223,11 @@ pub trait AsMutHList<'a, MutRefHListType: MutRefHList>: 'a + Sized {
         'b,
         InputType: 'static,
         OutputType: 'static,
-        F: Fn(MutRefHListType::MutRefHList<'b>, InputType) -> OutputType,
+        F: FnMut(MutRefHListType::MutRefHList<'b>, InputType) -> OutputType,
     >(
         &'b mut self,
         input: InputType,
-        f: F,
+        f: &'b mut F,
     ) -> OutputType
     where
         'a: 'b,
@@ -323,39 +316,48 @@ mod test {
         let state_3: SharedMutex<Vec<u32>> = new_shared(vec![]);
         let state = hlist!(state_1, state_2, state_3);
         let input = 4;
-        let fun = |hlist_pat![u32_mut, string_mut, vec_mut]: HList!(
+        let mut fun = |hlist_pat![u32_mut, string_mut, vec_mut]: HList!(
             &mut u32,
             &mut String,
             &mut Vec<u32>
         ),
-                   input| {
+                       input| {
             *u32_mut += 1u32;
             string_mut.push_str(&format!("{input}"));
             vec_mut.push(input)
         };
-        let clos = |input| {
+        let mut clos = |input| {
             let mut locked = Lock::<HList!(True, True, True)>::lock(&state);
-            locked.apply_fn(input, fun)
+            locked.apply_fn(input, &mut fun)
         };
         clos(input);
         clos(input);
     }
 
-    // need to uncomment #[test]
+    #[test]
     fn test_build() {
         let state_1 = new_shared(1u32);
         let state_2 = new_shared(Some(String::from("boop")));
         let state_3 = new_shared(0.32);
         let state = hlist!(state_1, state_2, state_3);
-        println!("Starting first lock");
-        let hlist_pat![_guard_1, _guard_2, _guard_3] =
-            Lock::<HList![True, True, True]>::lock(&state);
-        println!("Starting second lock");
-        let hlist_pat![_guard_1, _guard_2] = Lock::<HList![True, True, False]>::lock(&state);
-        let hlist_pat![_guard_1, _guard_2, _guard_3] = Lock::<
-            <HList![True, True, False] as BoolAlg<HList![False, True, True]>>::Or,
-        >::lock(&state);
-        // this doesn't compile
-        // let hlist_pat![guard_1, guard_2] = Lock::<HList![True, False, False]>::lock(&state);
+        {
+            println!("Starting first lock");
+            let hlist_pat![_guard_1, _guard_2, _guard_3] =
+                Lock::<HList![True, True, True]>::lock(&state);
+        }
+        {
+            println!("Starting second lock");
+            let hlist_pat![_guard_1, _guard_2] = Lock::<HList![True, True, False]>::lock(&state);
+        }
+        {
+            println!("Starting third lock");
+            let hlist_pat![_guard_1, _guard_2, _guard_3] = Lock::<
+                <HList![True, True, False] as BoolAlg<HList![False, True, True]>>::Or,
+            >::lock(&state);
+        }
+        {
+            // this doesn't compile
+            // let hlist_pat![guard_1, guard_2] = Lock::<HList![True, False, False]>::lock(&state);
+        }
     }
 }

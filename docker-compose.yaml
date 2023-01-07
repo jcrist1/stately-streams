@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:14.1-alpine3.15
+    ports: 
+      - "5436:5432"
+    environment:
+      POSTGRES_PASSWORD: secret
+      POSTGRES_USER: stream_user
+      POSTGRES_DB: stream_example
+      PGDATA: /pg_data/
+    volumes:
+      - pg_data:/pg_data
+
+volumes:
+  pg_data: 
