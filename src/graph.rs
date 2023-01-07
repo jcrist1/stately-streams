@@ -285,6 +285,59 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
             nodes: new_nodes,
         }
     }
+    pub fn select_map_async<
+        Filter,
+        FilteredNodeOutputs: SafeType,
+        SelectSubscriptionStream: Stream<Item = FilteredNodeOutputs>,
+        FilteredNodesJoinSubscription: SelectSubscribable<SubscriptionStream = SelectSubscriptionStream>,
+        FilteredNodes,
+        Output: SafeType,
+        FutureOutput: Future<Output = Output>,
+        F: FnMut(FilteredNodeOutputs) -> FutureOutput
+    >(
+        self,
+        _fltr: Filter,
+        f: F
+    ) -> Graph<
+        State,
+        HCons<
+            Node<
+                Output,
+                ArbitraryFlowStream<Then<SelectSubscriptionStream, FutureOutput, F>>,
+                HNil,
+            >,
+            <Nodes as SubscribableHList<Filter>>::NewSubscribedNodes,
+        >
+    > 
+    where
+        Nodes: SubscribableHList<
+            Filter,
+            FilteredNodes = FilteredNodes,
+            Subscriptions = FilteredNodesJoinSubscription,
+        >,
+    {
+        let Graph { state, nodes } = self;
+        let (old_nodes_with_new_subscription, subscription): (
+            <Nodes as SubscribableHList<Filter>>::NewSubscribedNodes,
+            _,
+        ) = SubscribableHList::<Filter>::select_subscribe(nodes);
+        let new_node = Node::new(
+            // a select node, can't be joined safely with other nodes, as a subset of the original
+            // nodes could be part of it, leading to non-uniform consumption
+            MapAsyncNode::new(subscription.select_subscribe(), f).get_internal_stream().non_uniform()
+        );
+        let b = new_node;
+        let new_nodes = HCons {
+            head: b,
+            tail: old_nodes_with_new_subscription,
+        };
+        Graph {
+            state,
+            nodes: new_nodes,
+        }
+
+    }
+
     pub fn select_subscribe<
         Filter,
         FilteredNodeOutputs: SafeType,
@@ -648,12 +701,12 @@ mod test {
             // .join_subscribe_with_state(hlist!(True), hlist!(True), move |hlist_pat!(stuff), hlist_pat!(int_inp)| {
             //     let people = Arc::clone(&people);
             //     int_inp + 1
-            // });
+            // })
             //
             // The below fails with 
             // rustc: the trait bound `std::sync::Mutex<Vec<Arc<Person>>>: LockFree` is not satisfied in `Arc<std::sync::Mutex<Vec<Arc<Person>>>>`
             // required for `Arc<std::sync::Mutex<Vec<Arc<Person>>>>` to implement `util::SafeType`
-            // .add_source_node(_state_stream);
+            // .add_source_node(_state_stream)
             ;
 
         let data = graph.run().await;

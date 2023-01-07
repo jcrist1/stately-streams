@@ -46,10 +46,107 @@ to improve it. I have not formally proven that this library doesn't deadlock (an
 the recursive types and traits should allow proofs to be developed. But I think the formal proofs would actually reveal what additional
 trait bounds are required.
 
+## How it works
+Hidden behind almost everything is [Frunk](https://docs.rs/frunk/latest/frunk/)'s [HList](https://docs.rs/frunk/latest/frunk/hlist/trait.HList.html).
+It is mostly used for the convenience macros `hlist~`
+A graph consists of an `HList` of nodes, and an HList of states, while a node consists of an internal stream as well as an `HList` of subscriber channel senders.
+A subset of nodes can be subscribed to to creat the input for a subsequent stream, and the streams can either be select merged in which case the input for the node
+is a generic enum (`CoProduct`), or join merged, in which case the input is an `HList`. The input can then be transformed in several ways, we can do a generic stream
+transformation `FnOnce(InputStream: Stream) -> OutputStream: Stream`), an asynchronous function `FnMut(InputType) -> Fut: Future<Output = OutputType>`) or
+a stately transformation `FnMut(&mut StateType, InputType) -> OutputType`.
+
+Given a graph we can we can add either a new source node from an asynchronous stream, or subscribe to previously existing nodes.
+Subscribing to existing nodes, requires filtering the nodes, which is done with an HList of  structs which implement a custom boolean trait.
+This could probably work with const generics, but I didn't expect it would play nicely with frunk and so didn't try. Subscriptions can either be join:
+waiting for all subscribed nodes to produce an element, or select: providing an elemnt from the fastest stream.
+In the case of the former the input type for the stream will be an HList (or [product](https://en.wikipedia.org/wiki/Product_(category_theory)), essentially a tuple)
+of the output types of each subscribed nodes, while in the latter, it will be a [coproduct](https://en.wikipedia.org/wiki/Coproduct) 
+(essentially an enum). Finally we attach multiple pieces of state to the graph (currently each piece only be `Arc<Mutex<_>>`).
+Inside the graph, each piece of state is appended to an HList containing all of the state of the graph, and when we add a node,
+we need to decide whether to use state and which pieces. If we wish to do this we need a second filter. An example 
+```rust
+graph.join_subscribe_with_state(
+    hlist![True, False, True, True, False],
+    hlist![False, True, True, False, False],
+    |hlist_pat(state_1, state_2, state_3),
+     hlist_pat!(node_2_output, node_3_output)| {
+         // code that updates state and transforms inputs to output type
+         ...
+         output
+     }
+)
+```
+
+If we look at the type parameters, signature, and constraints of the method:
+```rust
+    pub fn join_subscribe_with_state<
+        NodeFilter: Filter,
+        StateFilter: Filter,
+        FilteredNodeOutputs: SafeType,
+        JoinSubscriptionStream: Stream<Item = FilteredNodeOutputs> + 'static,
+        FilteredNodesJoinSubscription: JoinSubscribable<SubscriptionStream = JoinSubscriptionStream>,
+        FilteredNodes: UniformFlowStreamHList,
+        Output: SafeType,
+        FilteredState: MutRefHList + SafeType,
+        F,
+    >(
+        self,
+        // we have this to make type inference easier. Don't need to specify all type parameters
+        _state_flter: StateFilter,
+        _fltr: NodeFilter,
+        f: F,
+    ) -> Graph<
+        State,
+        HCons<
+            Node<
+                Output,
+                <LockInnerNode<
+                    FilteredNodeOutputs,
+                    Output,
+                    F,
+                    State,
+                    JoinSubscriptionStream,
+                    FilteredState,
+                    Scan<
+                        JoinSubscriptionStream,
+                        (State, F),
+                        Ready<Option<Output>>,
+                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Ready<Option<Output>>,
+                    >,
+                > as GetInternalStream>::InternalStream,
+                HNil,
+            >,
+            <Nodes as SubscribableHList<NodeFilter>>::NewSubscribedNodes,
+        >,
+    >
+    where
+        Nodes: SubscribableHList<
+            NodeFilter,
+            FilteredNodes = FilteredNodes,
+            Subscriptions = FilteredNodesJoinSubscription,
+        >,
+        State: Lock<StateFilter, InnerType = FilteredState>,
+        F: for<'a> FnMut(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + 'static,
+    {
+    ...
+}
+```
+Let's look at the traits in the type constraints
+* `Filter` is for types which are HLists of `TypeBool` types
+* `SafeType` is `LockFree + Clone + Send + Sync + Sized + 'static`, and is supposed to capture a the idea of a "simple" or "safe" type,
+that it should be okay to pass around within the graph (or hold as state)
+* `JoinSubscribable` means that the HList of nodes that are to be subscribed to, can be subscribed to
+* `UniformFlowStreamHlist` is for node HLists that can be safely join subscribed
+* `MutRefHList` means the type can be recursively dereferenced into an hlist of mutable references
+* `GetInternalStream` is just for getting an internal stream to a node and wrapping it in a struct that indicates whether it can be safely join subscribed
+* `SubscribableHList<NodeFilter>` is for hlists of nodes that can be filtered with the given `Filter`, `NodeFilter` (essentially that the filter and the nodes have the same length).
+* `Lock<StateFilter>` is similar to `SubscribableHList<_>` but for locking an hlist of `Arc<Mutex<_>>` types to get mutable references.
+
 ## basic graph construction
 
 I have provided an example which makes use of sqlx and in memory representations to calculate user profiles with exponential decay as a toy example.
 ```sh
+
 cargo run --release --example transaction_in_mem
 ```
 The example makes use of transaction guarantees via the DAG: we can ensure that an object is in memory and that a later flow step cannot change the state by binding to the initial source stream.

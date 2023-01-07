@@ -37,11 +37,6 @@ mod tests {
         text: String,
         id: i64,
     }
-    impl Message {
-        fn new(id: i64, text: String) -> Self {
-            Message { text, id }
-        }
-    }
     const TAKE: usize = 30;
 
     async fn transmit<T: Send + std::fmt::Debug + Sync + 'static>(
@@ -111,10 +106,8 @@ mod tests {
         let set_2: HashSet<u64> = HashSet::new();
 
         let state_1 = new_shared(set_1);
-        let state_1_copy = state_1.clone();
 
         let state_2 = new_shared(set_2);
-        let state_2_copy = state_2.clone();
 
         let (tx_211, rx_211) = channel(2);
         let node_21 = hlist![rx_11, rx_21]
