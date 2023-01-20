@@ -15,7 +15,7 @@ I received a lot of positive feedback, including some encouragement to look into
 
 Before explaining what the library does I would like to mention a recent development in the literature (with which I am woefully unfamiliar): 
 [Higher-Order Leak and Deadlock Free Locks](https://julesjacobs.com/pdf/locks.pdf). This really seems like it could contribute to "The Next Great Language". This 
-library takes some of the same approaches: encoding the dependency of steps in the computational graph, lock groups guaranteeing lock order (although ours are weaker.
+library takes some of similar approaches: encoding the dependency of steps in the computational graph, lock groups guaranteeing lock order (although ours are guaranteed by a global order).
 But until such a language is available, maybe we can build ways to more safely combine state and asynchronous stream processing without deadlocking.
 Now despite the initial fear I decided to take the leap and look at async code, and have implemented a very rough PoC of an asynchronous stream processing library
 that tries to guarantee deadlock free computation while allowine access to shared mutable state.
@@ -41,22 +41,22 @@ without ownership semantics.
 
 Finally this is really only a proof of concept at this stage. My main motiivation for this was to develop extremely complicated 
 recursive traits which this library makes prolific use of, as well as the [frunk library](https://docs.rs/frunk/latest/frunk/).
-This means that highly confusing trait bound abound within. I am currently missing all documentation, but will slowly endeavour
-to improve it. I have not formally proven that this library doesn't deadlock (and as is I don't think it does), but I believe
+This means that highly confusing trait bounds abound within. The code feels a bit like a hot mess and I am currently missing 
+all documentation, but will slowly endeavour to improve both. I have not formally proven that this library doesn't deadlock (and as is I don't think it does), but I believe
 the recursive types and traits should allow proofs to be developed. But I think the formal proofs would actually reveal what additional
 trait bounds are required.
 
 ## How it works
 Hidden behind almost everything is [Frunk](https://docs.rs/frunk/latest/frunk/)'s [HList](https://docs.rs/frunk/latest/frunk/hlist/trait.HList.html).
-It is mostly used for the convenience macros `hlist~`
+It is mostly used for the convenience macros `hlist!`, `HList!`, and `hlist_pat!`. 
 A graph consists of an `HList` of nodes, and an HList of states, while a node consists of an internal stream as well as an `HList` of subscriber channel senders.
-A subset of nodes can be subscribed to to creat the input for a subsequent stream, and the streams can either be select merged in which case the input for the node
+A subset of nodes can be subscribed to to create the input for a subsequent stream, and the streams can either be select merged in which case the input for the node
 is a generic enum (`CoProduct`), or join merged, in which case the input is an `HList`. The input can then be transformed in several ways, we can do a generic stream
 transformation `FnOnce(InputStream: Stream) -> OutputStream: Stream`), an asynchronous function `FnMut(InputType) -> Fut: Future<Output = OutputType>`) or
 a stately transformation `FnMut(&mut StateType, InputType) -> OutputType`.
 
 Given a graph we can we can add either a new source node from an asynchronous stream, or subscribe to previously existing nodes.
-Subscribing to existing nodes, requires filtering the nodes, which is done with an HList of  structs which implement a custom boolean trait.
+Subscribing to existing nodes, requires filtering the nodes, which is done with an HList of  custom boolean structs `True` and `False` which implement a custom `Boolean` trait.
 This could probably work with const generics, but I didn't expect it would play nicely with frunk and so didn't try. Subscriptions can either be join:
 waiting for all subscribed nodes to produce an element, or select: providing an elemnt from the fastest stream.
 In the case of the former the input type for the stream will be an HList (or [product](https://en.wikipedia.org/wiki/Product_(category_theory)), essentially a tuple)
@@ -227,7 +227,7 @@ rustc: the trait bound `(dyn DatabaseError + 'static): LockFree` is not satisfie
 within `impl futures::Future<Output = Result<(), Error>>`, the trait `LockFree` is not implemented for `(dyn DatabaseError + 'static)`](images/sqlx-not-lockfree-type-error.png)
 
 The solution for this was to implement a wrapper type for futures that allows unsafe declaration of lock free behaviour.
-In this case the programmer promises that the stream is not messing around with mutexes in the future:
+In this case the programmer promises that the stream is not messing around with locks in the future:
 ```rust
 #[pin_project]
 struct UnsafeLockFreeFut<Fut>(#[pin] Fut);
@@ -255,10 +255,10 @@ where
     }
 }
 ```
-This will probably move to the library.
+This should probably move to the library.
 
-Another issue that came up is when developing, I tried to do too much in one step, 
-and it was greatly simplified by moving more pieces into separate steps in the DAG.
+Another issue that came up is while developing this example: I tried to do too much in one dag step, 
+and it was greatly simplified by moving more pieces into separate nodes in the DAG.
 
 # Tests
 I attempted to provide some simple tests which illustrate various features. I hesitate to call these tests, as I wrote them to merely test that the test compiles,
@@ -278,6 +278,7 @@ in multiple places in sqlx (which in retrospect is not surprising). This is test
 
 
 # Current shortcomings
+* code is a bit of a hot mess with little to no documentation
 * tests of all graph construction functions
 * we don't exclude putting multiple clones of a single lock, which can trigger deadlock
   * A potential solution is to make adding state outside of a mutex safe, and adding state in a mutex unsafe
@@ -285,10 +286,10 @@ in multiple places in sqlx (which in retrospect is not surprising). This is test
 * missing common deadlock capable structs from library ecosystem (parking lot and tokio mutexes, dashmap, RWLocks)
 * frunk structs may not have efficient layouts
 * Unecessary copy of stream when node has only one subscriber
-* formal specification and proof of guarantees
-* no support for RWLocks which would allow better parallelism
+* no formal specification and proof of guarantees
+* no support for RWLocks which would allow better parallelism/concurrency
 * feels quite heavyweight with lots of channels, and clones
-* there is no ergonomic to subscribe to the output of the graph, or retrieve the state.
+* there is no ergonomic way to subscribe to the output of the graph, or retrieve the state.
 * no ergonomic support for fallible streams (e.g. no early termination, retries, ...?)
 * probably much more ...?
 
