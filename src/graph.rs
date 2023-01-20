@@ -2,9 +2,10 @@ use std::pin::Pin;
 
 use frunk::{prelude::HList, HCons, HNil};
 use futures::{
-    future::Ready,
+    future::Map,
     Future, Stream, stream::{Scan, Then},
 };
+use tokio::task::{JoinError, JoinHandle};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
@@ -219,7 +220,7 @@ impl<
 
 }
 
-impl<State: HList, Nodes: HList> Graph<State, Nodes> {
+impl<State: HList + Send + Sync, Nodes: HList> Graph<State, Nodes> {
     pub fn select_subscribe_with_state<
         NodeFilter: Filter,
         StateFilter: Filter,
@@ -245,8 +246,8 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
                     Scan<
                         SelectSubscriptionStream,
                         (State, F),
-                        Ready<Option<Output>>,
-                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Ready<Option<Output>>,
+                        Map<JoinHandle<Output>, fn(Result<Output, JoinError>) -> Option<Output>>,
+                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Map<JoinHandle<Output>, fn(Result<Output, JoinError>) -> Option<Output>>,
                     >
                 >,
                 HNil,
@@ -260,10 +261,10 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
             FilteredNodes = FilteredNodes,
             Subscriptions = FilteredNodesJoinSubscription,
         >,
-        State: Lock<StateFilter, InnerType = FilteredState>,
+        State: Lock<StateFilter, InnerType = FilteredState> + Send + Sync,
         FilteredState: SafeType,
         FilteredNodeOutputs: SafeType,
-        F: for<'a> Fn(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + 'static,
+        F: for<'a> Fn(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + Send + 'static,
     {
         let Graph { state, nodes } = self;
         let (old_nodes_with_new_subscription, subscription): (
@@ -426,8 +427,8 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
                     Scan<
                         JoinSubscriptionStream,
                         (State, F),
-                        Ready<Option<Output>>,
-                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Ready<Option<Output>>,
+                        Map<JoinHandle<Output>, fn(Result<Output, JoinError>) -> Option<Output>>,
+                        fn(&'_ mut (State, F), FilteredNodeOutputs) -> Map<JoinHandle<Output>, fn(Result<Output, JoinError>) -> Option<Output>>,
                     >,
                 > as GetInternalStream>::InternalStream,
                 HNil,
@@ -442,7 +443,7 @@ impl<State: HList, Nodes: HList> Graph<State, Nodes> {
             Subscriptions = FilteredNodesJoinSubscription,
         >,
         State: Lock<StateFilter, InnerType = FilteredState>,
-        F: for<'a> FnMut(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + 'static,
+        F: for<'a> FnMut(FilteredState::MutRefHList<'a>, FilteredNodeOutputs) -> Output+ Clone + LockFree + Send + 'static,
     {
         let Graph { state, nodes } = self;
         let (old_nodes_with_new_subscription, subscription): (
