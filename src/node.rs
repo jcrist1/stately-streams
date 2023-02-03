@@ -2,16 +2,20 @@ use std::marker::PhantomData;
 
 use frunk::HNil;
 use futures::{
-    future::{ready, Ready},
+    future::Map,
     stream::{Scan, Then},
-    Future, Stream, StreamExt,
+    Future, FutureExt, Stream, StreamExt,
 };
-use tokio::sync::mpsc::Receiver;
+use tokio::{
+    sync::mpsc::Receiver,
+    task::{JoinError, JoinHandle},
+};
 
 use crate::{
     hierarchical_state::{AsMutHList, Filter, Lock, MutRefHList},
     sender::SenderHList,
     subscriber::{Subscribable, SubscriptionOutput},
+    util::SafeType,
 };
 
 pub struct UniformFlowStream<Inner>(Inner);
@@ -213,10 +217,10 @@ pub struct LockInnerNode<
 }
 
 impl<
-        InputType: 'static,
-        OutputType: 'static,
-        ItemTransformation: Clone,
-        LockType: Clone + 'static,
+        InputType: SafeType,
+        OutputType: SafeType,
+        ItemTransformation: Send + Clone,
+        LockType: Send + Sync + Clone + 'static,
         InputStream,
         LockTypeAsMutRefHList,
     >
@@ -230,8 +234,14 @@ impl<
         Scan<
             InputStream,
             (LockType, ItemTransformation),
-            Ready<Option<OutputType>>,
-            fn(&'_ mut (LockType, ItemTransformation), InputType) -> Ready<Option<OutputType>>,
+            Map<JoinHandle<OutputType>, fn(Result<OutputType, JoinError>) -> Option<OutputType>>,
+            fn(
+                &'_ mut (LockType, ItemTransformation),
+                InputType,
+            ) -> Map<
+                JoinHandle<OutputType>,
+                fn(Result<OutputType, JoinError>) -> Option<OutputType>,
+            >,
         >,
     >
 where
@@ -258,13 +268,17 @@ where
             internal_stream: input_stream.scan(
                 (lock.clone(), transformation),
                 |(lock, f), item| {
-                    let o = {
-                        let mut guard = lock.lock();
-                        guard.apply_fn(item, f)
-                    };
-                    ready(Some(o))
+                    let lock = lock.clone();
+                    let mut f = f.clone();
+                    tokio::task::spawn_blocking(move || loop {
+                        if let Ok(mut guard) = lock.try_lock() {
+                            break guard.apply_fn(item, &mut f);
+                        };
+                    })
+                    .map(Result::ok)
                 },
             ),
+
             _lock_as_mut_ref_hlist: PhantomData::<LockTypeAsMutRefHList>,
         }
     }

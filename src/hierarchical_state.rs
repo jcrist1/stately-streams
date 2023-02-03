@@ -97,14 +97,14 @@ pub trait Lock<FilterType: Filter>: 'static + Clone {
     type LockType<'a>: AsMutHList<'a, Self::InnerType>
     where
         Self: 'a;
-    fn lock<'a>(&'a self) -> Self::LockType<'a>;
+    fn try_lock<'a>(&'a self) -> Result<Self::LockType<'a>, ()>;
 }
 
 impl Lock<HNil> for HNil {
     type InnerType = HNil;
     type LockType<'a> = HNil where HNil: 'a;
-    fn lock<'a>(&'a self) -> HNil {
-        HNil
+    fn try_lock<'a>(&'a self) -> Result<HNil, ()> {
+        Ok(HNil)
     }
 }
 
@@ -115,14 +115,14 @@ impl<S: SafeType + 'static, TailFilter: Filter, TailState: Lock<TailFilter>>
 
     type InnerType = HCons<S, TailState::InnerType>;
 
-    fn lock<'a>(&'a self) -> Self::LockType<'a> {
+    fn try_lock<'a>(&'a self) -> Result<Self::LockType<'a>, ()> {
         let HCons { head, tail } = self;
-        let head = head.lock().unwrap();
-        let tail = tail.lock();
-        HCons {
+        let head = head.try_lock().map_err(|_| ())?;
+        let tail = tail.try_lock()?;
+        Ok(HCons {
             head: AsMutContainer::new(head),
             tail,
-        }
+        })
     }
 }
 
@@ -133,9 +133,9 @@ impl<S: SafeType + 'static, TailFilter: Filter, TailState: Lock<TailFilter>>
 
     type InnerType = TailState::InnerType;
 
-    fn lock<'a>(&'a self) -> Self::LockType<'a> {
+    fn try_lock<'a>(&'a self) -> Result<Self::LockType<'a>, ()> {
         let HCons { tail, .. } = self;
-        tail.lock()
+        tail.try_lock()
     }
 }
 
@@ -327,7 +327,8 @@ mod test {
             vec_mut.push(input)
         };
         let mut clos = |input| {
-            let mut locked = Lock::<HList!(True, True, True)>::lock(&state);
+            let mut locked = Lock::<HList!(True, True, True)>::try_lock(&state)
+                .expect("tried and failed to lock");
             locked.apply_fn(input, &mut fun)
         };
         clos(input);
@@ -343,17 +344,21 @@ mod test {
         {
             println!("Starting first lock");
             let hlist_pat![_guard_1, _guard_2, _guard_3] =
-                Lock::<HList![True, True, True]>::lock(&state);
+                Lock::<HList![True, True, True]>::try_lock(&state)
+                    .expect("tried and failed to lock");
         }
         {
             println!("Starting second lock");
-            let hlist_pat![_guard_1, _guard_2] = Lock::<HList![True, True, False]>::lock(&state);
+            let hlist_pat![_guard_1, _guard_2] =
+                Lock::<HList![True, True, False]>::try_lock(&state)
+                    .expect("tried and failed to lock");
         }
         {
             println!("Starting third lock");
             let hlist_pat![_guard_1, _guard_2, _guard_3] = Lock::<
                 <HList![True, True, False] as BoolAlg<HList![False, True, True]>>::Or,
-            >::lock(&state);
+            >::try_lock(&state)
+            .expect("tried and failed to lock");
         }
         {
             // this doesn't compile
