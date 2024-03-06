@@ -305,5 +305,8 @@ My friend said of this
 
 which I take a certain dubious pride in.
 
+Another quote that I recently got from someone I showed this too:
+> I knew it! I knew some crazed lunatic would find a use-case and manger of implementing typesystem graphs xD
+
 
 
